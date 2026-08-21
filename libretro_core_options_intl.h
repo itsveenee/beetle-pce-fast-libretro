@@ -26385,47 +26385,47 @@ struct retro_core_options_v2 options_or = {
 /* RETRO_LANGUAGE_PL */
 
 #define CATEGORY_VIDEO_LABEL_PL "Wideo"
-#define CATEGORY_VIDEO_INFO_0_PL "Skonfiguruj przycinanie wyświetlania, pominięcie ramki i inne parametry wyjściowe obrazu."
+#define CATEGORY_VIDEO_INFO_0_PL "Skonfiguruj przycinanie obrazu, pomijanie klatek i inne parametry wyjścia obrazu."
 #define CATEGORY_INPUT_LABEL_PL "Wejście"
-#define CATEGORY_INPUT_INFO_0_PL NULL
-#define CATEGORY_HACKS_LABEL_PL "Hacki emulacyjne"
-#define CATEGORY_HACKS_INFO_0_PL "Skonfiguruj przetaktowanie procesora i dokładność emulacji wpływające na niską wydajność i kompatybilność."
+#define CATEGORY_INPUT_INFO_0_PL "Skonfiguruj wejście pistoletu świetlnego, myszy i NegCon."
+#define CATEGORY_HACKS_LABEL_PL "Hacki emulacji"
+#define CATEGORY_HACKS_INFO_0_PL "Skonfiguruj podkręcenie procesora i parametry dokładność emulacji wpływające na wydajność niskiego poziomu i kompatybilność."
 #define CATEGORY_CHANNEL_VOLUME_LABEL_PL "Zaawansowane ustawienia głośności kanału"
-#define CATEGORY_CHANNEL_VOLUME_INFO_0_PL NULL
+#define CATEGORY_CHANNEL_VOLUME_INFO_0_PL "Zmień głośność poszczególnych sprzętowych kanałów audio."
 #define CATEGORY_CD_LABEL_PL NULL
 #define CATEGORY_CD_INFO_0_PL "Skonfiguruj ustawienia związane z emulacją PC Engine CD."
 #define PCE_FAST_PALETTE_LABEL_PL "Paleta kolorów"
-#define PCE_FAST_PALETTE_INFO_0_PL NULL
+#define PCE_FAST_PALETTE_INFO_0_PL "Kompozyt próbuje odtworzyć oryginalne dane wyjściowe konsoli i może pokazać więcej szczegółów w niektórych grach."
 #define OPTION_VAL_RGB_PL NULL
-#define OPTION_VAL_COMPOSITE_PL "Kompozytowy"
+#define OPTION_VAL_COMPOSITE_PL "Kompozyt"
 #define PCE_FAST_FRAMESKIP_LABEL_PL "Pomijanie klatek"
-#define PCE_FAST_FRAMESKIP_INFO_0_PL NULL
+#define PCE_FAST_FRAMESKIP_INFO_0_PL "Pomijaj klatki, aby uniknąć trzasków w dźwięku. Poprawia wydajność kosztem widocznej płynności. 'Auto' pomija klatki, gdy jest to zalecane przez frontend. 'Ręczne' używa ustawienia 'Próg pomijania klatkek (%)'."
 #define OPTION_VAL_AUTO_PL NULL
 #define OPTION_VAL_MANUAL_PL "Ręcznie"
 #define PCE_FAST_FRAMESKIP_THRESHOLD_LABEL_PL "Próg pominięcia ramki (%)"
 #define PCE_FAST_FRAMESKIP_THRESHOLD_INFO_0_PL "Gdy 'Frameskip' jest ustawiony na 'Manual', określa próg zajęcia bufora audio (procent) poniżej którego ramki zostaną pominięte. Wyższe wartości zmniejszają ryzyko trzasków poprzez częstsze opuszczanie ramek."
 #define OPTION_VAL_33_PL "33 (domyślnie)"
-#define PCE_FAST_HOVERSCAN_LABEL_PL NULL
+#define PCE_FAST_HOVERSCAN_LABEL_PL "Poziomu Overscan (Tylko tryb szerokości 352)"
 #define PCE_FAST_HOVERSCAN_INFO_0_PL "Wybierz maksymalną szerokość obrazu, która ma być wyświetlana. Niższe wartości będą przycinać prawą stronę obrazu (dla gier 352 px szerokości)."
 #define OPTION_VAL_352_PL "352 (domyślnie)"
-#define PCE_FAST_INITIAL_SCANLINE_LABEL_PL NULL
-#define PCE_FAST_INITIAL_SCANLINE_INFO_0_PL NULL
+#define PCE_FAST_INITIAL_SCANLINE_LABEL_PL "Początkowa linia skanowania"
+#define PCE_FAST_INITIAL_SCANLINE_INFO_0_PL "Pierwsza renderowana linia skanowania. Wyższe wartości będą przycinać górną część obrazu."
 #define OPTION_VAL_3_PL "3 (domyślnie)"
-#define PCE_FAST_LAST_SCANLINE_LABEL_PL NULL
-#define PCE_FAST_LAST_SCANLINE_INFO_0_PL NULL
+#define PCE_FAST_LAST_SCANLINE_LABEL_PL "Ostatnia linia skanowania"
+#define PCE_FAST_LAST_SCANLINE_INFO_0_PL "Ostatni renderowana linia skanowania. Niższe wartości będą przycinać dolną część obrazu."
 #define OPTION_VAL_242_PL "242 (domyślnie)"
-#define PCE_FAST_SOUND_CHANNEL_0_VOLUME_LABEL_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_0_VOLUME_INFO_0_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_1_VOLUME_LABEL_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_1_VOLUME_INFO_0_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_2_VOLUME_LABEL_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_2_VOLUME_INFO_0_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_3_VOLUME_LABEL_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_3_VOLUME_INFO_0_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_4_VOLUME_LABEL_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_4_VOLUME_INFO_0_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_5_VOLUME_LABEL_PL NULL
-#define PCE_FAST_SOUND_CHANNEL_5_VOLUME_INFO_0_PL NULL
+#define PCE_FAST_SOUND_CHANNEL_0_VOLUME_LABEL_PL "% Głośności kanału PSG Sound 0"
+#define PCE_FAST_SOUND_CHANNEL_0_VOLUME_INFO_0_PL "Modyfikuj głośność kanału PSG Sound 0."
+#define PCE_FAST_SOUND_CHANNEL_1_VOLUME_LABEL_PL "% Głośności kanału PSG Sound 1"
+#define PCE_FAST_SOUND_CHANNEL_1_VOLUME_INFO_0_PL "Modyfikuj głośność kanału PSG Sound 1."
+#define PCE_FAST_SOUND_CHANNEL_2_VOLUME_LABEL_PL "% Głośności kanału PSG Sound 2"
+#define PCE_FAST_SOUND_CHANNEL_2_VOLUME_INFO_0_PL "Modyfikuj głośność kanału PSG Sound 2."
+#define PCE_FAST_SOUND_CHANNEL_3_VOLUME_LABEL_PL "% Głośności kanału PSG Sound 3"
+#define PCE_FAST_SOUND_CHANNEL_3_VOLUME_INFO_0_PL "Modyfikuj głośność kanału PSG Sound 3."
+#define PCE_FAST_SOUND_CHANNEL_4_VOLUME_LABEL_PL "% Głośności kanału PSG Sound 4"
+#define PCE_FAST_SOUND_CHANNEL_4_VOLUME_INFO_0_PL "Modyfikuj głośność kanału PSG Sound 4."
+#define PCE_FAST_SOUND_CHANNEL_5_VOLUME_LABEL_PL "% Głośności kanału PSG Sound 5"
+#define PCE_FAST_SOUND_CHANNEL_5_VOLUME_INFO_0_PL "Modyfikuj głośność kanału PSG Sound 5."
 #define PCE_FAST_MOUSE_SENSITIVITY_LABEL_PL "Czułość myszy"
 #define PCE_FAST_MOUSE_SENSITIVITY_INFO_0_PL "Wyższe wartości sprawią, że kursor myszy będzie się szybszy."
 #define OPTION_VAL_0_25_PL NULL
@@ -26448,36 +26448,36 @@ struct retro_core_options_v2 options_or = {
 #define OPTION_VAL_4_50_PL NULL
 #define OPTION_VAL_4_75_PL NULL
 #define OPTION_VAL_5_00_PL NULL
-#define PCE_FAST_DISABLE_SOFTRESET_LABEL_PL "Wyłącz resetowanie systemu (RUN+SELECT)"
-#define PCE_FAST_DISABLE_SOFTRESET_INFO_0_PL NULL
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P1_LABEL_PL "Domyślny typ Joypad P1"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P1_INFO_0_PL NULL
+#define PCE_FAST_DISABLE_SOFTRESET_LABEL_PL "Wyłącz miękki reset (RUN+SELECT)"
+#define PCE_FAST_DISABLE_SOFTRESET_INFO_0_PL "Gdy RUN i SELECT są jednocześnie naciśnięte, wyłącz oba przyciski tymczasowo zamiast resetowania."
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P1_LABEL_PL "Domyślny typ Joypada P1"
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P1_INFO_0_PL "Wybierz, czy joypad portu 1 powinien mieć domyślnie 2, czy 6 przycisków. Ta opcja jest stosowana tylko przy starcie rdzenia, jeśli chcesz przełączyć się, podczas gdy treść jest uruchomiona, użyj przycisku 'Mode Switch'. UWAGA: 6 przyciskowy joypad może się dziwnie zachowywać w niekompatybilnych grach."
 #define OPTION_VAL_2_BUTTONS_PL "2 przyciski"
 #define OPTION_VAL_6_BUTTONS_PL "6 przycisków"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P2_LABEL_PL "Domyślny typ Joypad P2"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P2_INFO_0_PL NULL
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P3_LABEL_PL "Domyślny typ Joypad P3"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P3_INFO_0_PL NULL
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P4_LABEL_PL "P4 Domyślny typ Joypad"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P4_INFO_0_PL NULL
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P5_LABEL_PL NULL
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P5_INFO_0_PL NULL
-#define PCE_FAST_TURBO_TOGGLING_LABEL_PL "Przełącz Turbo"
-#define PCE_FAST_TURBO_TOGGLING_INFO_0_PL NULL
-#define PCE_FAST_TURBO_TOGGLE_HOTKEY_LABEL_PL "Alternatywny skrót Turbo"
-#define PCE_FAST_TURBO_TOGGLE_HOTKEY_INFO_0_PL NULL
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P2_LABEL_PL "Domyślny typ Joypada P2"
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P2_INFO_0_PL "Wybierz, czy joypad portu 2 powinien mieć domyślnie 2, czy 6 przycisków. Ta opcja jest stosowana tylko przy starcie rdzenia, jeśli chcesz przełączyć się, podczas gdy treść jest uruchomiona, użyj przycisku 'Mode Switch'. UWAGA: 6 przyciskowy joypad może się dziwnie zachowywać w niekompatybilnych grach."
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P3_LABEL_PL "Domyślny typ Joypada P3"
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P3_INFO_0_PL "Wybierz, czy joypad portu 3 powinien mieć domyślnie 2, czy 6 przycisków. Ta opcja jest stosowana tylko przy starcie rdzenia, jeśli chcesz przełączyć się, podczas gdy treść jest uruchomiona, użyj przycisku 'Mode Switch'. UWAGA: 6 przyciskowy joypad może się dziwnie zachowywać w niekompatybilnych grach."
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P4_LABEL_PL "Domyślny typ Joypada P4"
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P4_INFO_0_PL "Wybierz, czy joypad portu 4 powinien mieć domyślnie 2, czy 6 przycisków. Ta opcja jest stosowana tylko przy starcie rdzenia, jeśli chcesz przełączyć się, podczas gdy treść jest uruchomiona, użyj przycisku 'Mode Switch'. UWAGA: 6 przyciskowy joypad może się dziwnie zachowywać w niekompatybilnych grach."
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P5_LABEL_PL "Domyślny typ Joypada P5"
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P5_INFO_0_PL "Wybierz, czy joypad portu 5 powinien mieć domyślnie 2, czy 6 przycisków. Ta opcja jest stosowana tylko przy starcie rdzenia, jeśli chcesz przełączyć się, podczas gdy treść jest uruchomiona, użyj przycisku 'Mode Switch'. UWAGA: 6 przyciskowy joypad może się dziwnie zachowywać w niekompatybilnych grach."
+#define PCE_FAST_TURBO_TOGGLING_LABEL_PL "Przełączanie Turbo"
+#define PCE_FAST_TURBO_TOGGLING_INFO_0_PL "Włącz klawisze skrótów przełączania turbo (przyciski III I IV)."
+#define PCE_FAST_TURBO_TOGGLE_HOTKEY_LABEL_PL "Alternatywny klawisz skrótu Turbo"
+#define PCE_FAST_TURBO_TOGGLE_HOTKEY_INFO_0_PL "Przypisz przyciski L3/R3 RetroPada jako klawisze przełączania turbo zamiast przycisków III i IV. Działa tak długo, jak nic nie jest przypisane do przycisków L3/R3. Za pomocą tego możesz uniknąć remapowania przycisków III i IV podczas przełączania na 6-przyciskowy tryb kontrolera."
 #define PCE_FAST_TURBO_DELAY_LABEL_PL "Opóźnienie Turbo"
-#define PCE_FAST_TURBO_DELAY_INFO_0_PL NULL
-#define PCE_FAST_CDIMAGECACHE_LABEL_PL NULL
-#define PCE_FAST_CDIMAGECACHE_INFO_0_PL NULL
+#define PCE_FAST_TURBO_DELAY_INFO_0_PL "Dostosuj czas pomiędzy wciśnięciami turbo (w klatkach)."
+#define PCE_FAST_CDIMAGECACHE_LABEL_PL "Pamięć podręczna obrazów CD (Wymagany restart)"
+#define PCE_FAST_CDIMAGECACHE_INFO_0_PL "Załaduj pełny obraz do pamięci przy starcie. Może skrócić czasy ładowania kosztem zwiększonego czasu uruchomienia."
 #define PCE_FAST_CDBIOS_LABEL_PL "CD BIOS (wymagany restart)"
-#define PCE_FAST_CDBIOS_INFO_0_PL NULL
+#define PCE_FAST_CDBIOS_INFO_0_PL "Większość gier może być uruchomiona na 'System Card 3'. 'Games Express' jest potrzebny dla kilku nielicencjonowanych gier."
 #define OPTION_VAL_GAMES_EXPRESS_PL NULL
-#define OPTION_VAL_SYSTEM_CARD_1_PL "Karta systemowa 1"
-#define OPTION_VAL_SYSTEM_CARD_2_PL "Karta systemowa 2"
-#define OPTION_VAL_SYSTEM_CARD_3_PL "Karta systemowa 3"
-#define OPTION_VAL_SYSTEM_CARD_2_US_PL "Karta systemowa 2 USA"
-#define OPTION_VAL_SYSTEM_CARD_3_US_PL "Karta systemowa 3 USA"
+#define OPTION_VAL_SYSTEM_CARD_1_PL NULL
+#define OPTION_VAL_SYSTEM_CARD_2_PL NULL
+#define OPTION_VAL_SYSTEM_CARD_3_PL NULL
+#define OPTION_VAL_SYSTEM_CARD_2_US_PL NULL
+#define OPTION_VAL_SYSTEM_CARD_3_US_PL NULL
 #define PCE_FAST_CDSPEED_LABEL_PL "(CD) Prędkość CD"
 #define PCE_FAST_CDSPEED_LABEL_CAT_PL "Prędkość CD"
 #define PCE_FAST_CDSPEED_INFO_0_PL "Wyższe wartości umożliwiają szybsze ładowanie, ale mogą powodować problemy z kilkoma grami."
@@ -26487,22 +26487,22 @@ struct retro_core_options_v2 options_or = {
 #define OPTION_VAL_8_PL NULL
 #define PCE_FAST_ADPCMVOLUME_LABEL_PL "(CD) Głośność ADPCM %"
 #define PCE_FAST_ADPCMVOLUME_LABEL_CAT_PL "Głośność ADPCM %"
-#define PCE_FAST_ADPCMVOLUME_INFO_0_PL "Tylko gra CD. Ustawienie tej kontroli głośności może spowodować przycinanie próbki."
+#define PCE_FAST_ADPCMVOLUME_INFO_0_PL "Tylko gry CD. Ustawienie tej głośności zbyt wysoko może spowodować przycinanie sampli."
 #define PCE_FAST_ADPCMVOLUME_INFO_1_PL "Ustawienie zbyt dużej regulacji głośności może spowodować przycinanie próbki."
-#define PCE_FAST_ADPCMLP_LABEL_PL NULL
-#define PCE_FAST_ADPCMLP_LABEL_CAT_PL NULL
-#define PCE_FAST_ADPCMLP_INFO_0_PL NULL
-#define PCE_FAST_ADPCMLP_INFO_1_PL NULL
+#define PCE_FAST_ADPCMLP_LABEL_PL "(CD) ADPCM filtr dolnoprzepustowy"
+#define PCE_FAST_ADPCMLP_LABEL_CAT_PL "ADPCM filtr dolnoprzepustowy"
+#define PCE_FAST_ADPCMLP_INFO_0_PL "Tylko gry CD. Zastosuj filtr nisko przepustowy do odtwarzania sampli CD, zmniejszając aliasy/szorstkość wysokiej częstotliwości. Odcięcie skaluje się z szybkością próbkowania ADPCM."
+#define PCE_FAST_ADPCMLP_INFO_1_PL "Stosuje filtr niskoprzepustowy do odtwarzania sampli CD, zmniejszając alias/szorstkość wysokich częstotliwości."
 #define PCE_FAST_CDDAVOLUME_LABEL_PL "(CD) Głośność CDDA %"
 #define PCE_FAST_CDDAVOLUME_LABEL_CAT_PL "Głośność CDDA %"
 #define PCE_FAST_CDPSGVOLUME_LABEL_PL "(CD) Głośność PSG %"
 #define PCE_FAST_CDPSGVOLUME_LABEL_CAT_PL "Głośność CD PSG %"
-#define PCE_FAST_CDIGNOREERRORS_LABEL_PL NULL
-#define PCE_FAST_CDIGNOREERRORS_INFO_0_PL NULL
+#define PCE_FAST_CDIGNOREERRORS_LABEL_PL "CD Ignoruj błędy EDC/L-EC"
+#define PCE_FAST_CDIGNOREERRORS_INFO_0_PL "Ignoruj błędy EDC/L-EC. Potrzebne dla kompatybilności z niektórymi hackami."
 #define PCE_FAST_NOSPRITELIMIT_LABEL_PL "Bez limitu Sprite'ów"
-#define PCE_FAST_NOSPRITELIMIT_INFO_0_PL NULL
+#define PCE_FAST_NOSPRITELIMIT_INFO_0_PL "Usuń limit sprzętowy 16-spriteów na linię. OSTRZEŻENIE: może powodować błędy grafiki na niektórych grach."
 #define PCE_FAST_OCMULTIPLIER_LABEL_PL "Mnożnik podkręcania CPU (wymagany restart)"
-#define PCE_FAST_OCMULTIPLIER_INFO_0_PL NULL
+#define PCE_FAST_OCMULTIPLIER_INFO_0_PL "Wyższe wartości mogą zmniejszyć spowolnienia w grach. OSTRZEŻENIE: Może powodować błędy i awarie."
 
 struct retro_core_option_v2_category option_cats_pl[] = {
    {
@@ -36999,17 +36999,17 @@ struct retro_core_options_v2 options_val = {
 #define PCE_FAST_DISABLE_SOFTRESET_LABEL_VN "Tắt khởi động lại nhanh (RUN+SELECT)"
 #define PCE_FAST_DISABLE_SOFTRESET_INFO_0_VN "Khi nhấn RUN và SELECT cùng lúc, tạm thời vô hiệu cả hai Phím thay vì đặt lại."
 #define PCE_FAST_DEFAULT_JOYPAD_TYPE_P1_LABEL_VN "Loại tay cầm mặc định P1"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P1_INFO_0_VN "Chọn tay cầm cổng 1 mặc định là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi Trình giả lập khởi động. Nếu muốn đổi khi nội dung đang chạy, hãy dùng Phím \"Chuyển chế độ\".LƯU Ý: Tay cầm 6 Phím có thể gặp hành vi bất thường trong các trò chơi không tương thích."
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P1_INFO_0_VN "Chọn tay cầm cổng 1 mặc định là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi trình giả lập khởi động. Nếu muốn đổi khi nội dung đang chạy, hãy dùng Phím \"Chuyển chế độ\".LƯU Ý: Tay cầm 6 Phím có thể gặp hành vi bất thường trong các trò chơi không tương thích."
 #define OPTION_VAL_2_BUTTONS_VN "2 nút"
 #define OPTION_VAL_6_BUTTONS_VN "6 nút"
 #define PCE_FAST_DEFAULT_JOYPAD_TYPE_P2_LABEL_VN "Loại tay cầm mặc định P2"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P2_INFO_0_VN "Chọn tay cầm cổng 2 mặc định là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi Trình giả lập khởi động. Nếu muốn đổi khi nội dung đang chạy, hãy dùng Phím \"Chuyển chế độ\".LƯU Ý: Tay cầm 6 Phím có thể gặp hành vi bất thường trong các trò chơi không tương thích."
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P2_INFO_0_VN "Chọn tay cầm cổng 2 mặc định là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi trình giả lập khởi động. Nếu muốn đổi khi nội dung đang chạy, hãy dùng Phím \"Chuyển chế độ\".LƯU Ý: Tay cầm 6 Phím có thể gặp hành vi bất thường trong các trò chơi không tương thích."
 #define PCE_FAST_DEFAULT_JOYPAD_TYPE_P3_LABEL_VN "Loại tay cầm mặc định P3"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P3_INFO_0_VN "Chọn tay cầm cổng 3 mặc định là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi Trình giả lập khởi động. Nếu muốn đổi khi nội dung đang chạy, hãy dùng Phím \"Chuyển chế độ\".LƯU Ý: Tay cầm 6 Phím có thể gặp hành vi bất thường trong các trò chơi không tương thích."
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P3_INFO_0_VN "Chọn tay cầm cổng 3 mặc định là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi trình giả lập khởi động. Nếu muốn đổi khi nội dung đang chạy, hãy dùng Phím \"Chuyển chế độ\".LƯU Ý: Tay cầm 6 Phím có thể gặp hành vi bất thường trong các trò chơi không tương thích."
 #define PCE_FAST_DEFAULT_JOYPAD_TYPE_P4_LABEL_VN "Loại tay cầm mặc định P4"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P4_INFO_0_VN "Chọn mặc định tay cầm cổng 4 sẽ là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi Trình giả lập khởi động, nếu muốn chuyển đổi trong lúc nội dung đang chạy, hãy dùng Phím “Chuyển chế độ”. LƯU Ý: Tay cầm 6 Phím có thể hoạt động bất thường trong các trò chơi không tương thích."
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P4_INFO_0_VN "Chọn mặc định tay cầm cổng 4 sẽ là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi trình giả lập khởi động, nếu muốn chuyển đổi trong lúc nội dung đang chạy, hãy dùng Phím “Chuyển chế độ”. LƯU Ý: Tay cầm 6 Phím có thể hoạt động bất thường trong các trò chơi không tương thích."
 #define PCE_FAST_DEFAULT_JOYPAD_TYPE_P5_LABEL_VN "Loại tay cầm mặc định cho cổng 5"
-#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P5_INFO_0_VN "Chọn mặc định tay cầm cổng 5 sẽ là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi Trình giả lập khởi động, nếu muốn chuyển đổi trong lúc nội dung đang chạy, hãy dùng Phím “Chuyển chế độ”. LƯU Ý: Tay cầm 6 Phím có thể hoạt động bất thường trong các trò chơi không tương thích."
+#define PCE_FAST_DEFAULT_JOYPAD_TYPE_P5_INFO_0_VN "Chọn mặc định tay cầm cổng 5 sẽ là 2 hay 6 nút. Tùy chọn này chỉ áp dụng khi trình giả lập khởi động, nếu muốn chuyển đổi trong lúc nội dung đang chạy, hãy dùng Phím “Chuyển chế độ”. LƯU Ý: Tay cầm 6 Phím có thể hoạt động bất thường trong các trò chơi không tương thích."
 #define PCE_FAST_TURBO_TOGGLING_LABEL_VN "Bật/Tắt tự động nhấn"
 #define PCE_FAST_TURBO_TOGGLING_INFO_0_VN "Bật phím tắt chuyển đổi chế độ tự động nhấn (Phím III và IV)."
 #define PCE_FAST_TURBO_TOGGLE_HOTKEY_LABEL_VN "Phím tắt tự động nhấn thay thế"
