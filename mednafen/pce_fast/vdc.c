@@ -996,34 +996,29 @@ static INLINE void MixBGSPR(const uint32 count_in, const uint8 *bg_linebuf_in, c
    unsigned int x = 0;
 
 #ifdef AURORA_PS2_PCE_FAST
-   /* AURORA_PCE_EXPERIMENTAL_V14_SPRITE_PSG
-    * Transparent 4-pixel chunks bypass four sprite-priority tests.
-    */
-   for(; x + 3 < count_in; x += 4)
+   /* AURORA_SNES9X2010_V5_ALLCORES_PERF_20260824
+    * Most scanline chunks contain no sprite pixel. Test eight pixels with two
+    * safe unaligned loads, then bypass all eight priority decisions. */
+   for(; x + 7 < count_in; x += 8)
    {
-      uint64 spr4;
-      memcpy(&spr4, spr_linebuf_in + x, sizeof(spr4));
+      uint64 spr_lo, spr_hi;
+      memcpy(&spr_lo, spr_linebuf_in + x, sizeof(spr_lo));
+      memcpy(&spr_hi, spr_linebuf_in + x + 4, sizeof(spr_hi));
 
-      if(!spr4)
+      if(!(spr_lo | spr_hi))
       {
-         const uint32 b0 = bg_linebuf_in[x + 0];
-         const uint32 b1 = bg_linebuf_in[x + 1];
-         const uint32 b2 = bg_linebuf_in[x + 2];
-         const uint32 b3 = bg_linebuf_in[x + 3];
-
-         target_in[x + 0] =
-            vce.color_table_cache[(b0 & 0x0F) ? b0 : 0];
-         target_in[x + 1] =
-            vce.color_table_cache[(b1 & 0x0F) ? b1 : 0];
-         target_in[x + 2] =
-            vce.color_table_cache[(b2 & 0x0F) ? b2 : 0];
-         target_in[x + 3] =
-            vce.color_table_cache[(b3 & 0x0F) ? b3 : 0];
+         unsigned k;
+         for(k = 0; k < 8; ++k)
+         {
+            const uint32 bg = bg_linebuf_in[x + k];
+            target_in[x + k] =
+               vce.color_table_cache[(bg & 0x0F) ? bg : 0];
+         }
       }
       else
       {
          unsigned k;
-         for(k = 0; k < 4; ++k)
+         for(k = 0; k < 8; ++k)
          {
             const uint32 bg_pixel = bg_linebuf_in[x + k];
             const uint32 spr_pixel = spr_linebuf_in[x + k];
