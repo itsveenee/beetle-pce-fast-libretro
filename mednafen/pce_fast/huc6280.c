@@ -89,7 +89,31 @@ struct HuC6280 HuCPU;
 
 // Page change PC, GET IT?!
 #ifdef HUC6280_CRAZY_VERSION
- #define FixPC_PC() SetPC(GetRealPC());
+ #ifdef AURORA_PS2_PCE_FAST
+  /* AURORA_PCE_EXPERIMENTAL_V5
+   * Behaviour-preserving form of SetPC(GetRealPC()).
+   *
+   * Original SetPC:
+   *   real = PC - PC_base
+   *   new_base = FastPageR[real >> 13]
+   *   PC = new_base + real
+   *   PC_base = new_base
+   *
+   * If new_base == PC_base, then new_base + real is necessarily the
+   * current PC, so both assignments are no-ops. Page crossings and MPR
+   * remaps still produce a different FastPageR base and take the slow
+   * path exactly as before. */
+  #define FixPC_PC() do { \
+     unsigned int aurora_real_pc = GetRealPC(); \
+     uintptr_t aurora_new_base = HuCPU.FastPageR[aurora_real_pc >> 13]; \
+     if(HU_PC_base != aurora_new_base) { \
+        HU_PC = aurora_new_base + aurora_real_pc; \
+        HU_PC_base = aurora_new_base; \
+     } \
+  } while(0)
+ #else
+  #define FixPC_PC() SetPC(GetRealPC());
+ #endif
 #else
  #define FixPC_PC()
 #endif
@@ -105,6 +129,17 @@ struct HuC6280 HuCPU;
 // If we change this definition, we'll need to also fix HuC6280_StealCycle() in huc6280.h
 #define ADDCYC(x) { HuCPU.timestamp += x; }
 
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_EXPERIMENTAL_V6
+ * Resolve certified physical-bank pointers only when an MPR changes. */
+#define AURORA_PCE_CACHE_MPR(wmpr, wbank) do { \
+   HuCPU.FastReadPage[wmpr] = HuCPU.FastRead[wbank]; \
+   HuCPU.FastWritePage[wmpr] = HuCPU.FastWrite[wbank]; \
+} while(0)
+#else
+#define AURORA_PCE_CACHE_MPR(wmpr, wbank) do { } while(0)
+#endif
+
 #define SET_MPR(arg_i, arg_v)				\
 {							\
  const unsigned int wmpr = arg_i, wbank = arg_v;	\
@@ -114,6 +149,7 @@ struct HuC6280 HuCPU;
  }							\
  HuCPU.MPR[wmpr] = wbank;					\
  HuCPU.FastPageR[wmpr] = (uintptr_t)HuCPU.FastMap[wbank] - wmpr * 8192;        \
+ AURORA_PCE_CACHE_MPR(wmpr, wbank);					\
 }
 
 void HuC6280_SetMPR(int i, int v)
@@ -135,24 +171,80 @@ static void HuC6280_FlushMPRCache(void)
 
 static INLINE uint8 RdMem(unsigned int A)
 {
-   uint8 wmpr = HuCPU.MPR[A >> 13];
- return(HuCPU.PCERead[wmpr]((wmpr << 13) | (A & 0x1FFF)));
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V6
+    * SET_MPR already resolved physical bank -> certified direct pointer.
+    * The common path therefore needs only one logical-page lookup. */
+   {
+      const unsigned int page = A >> 13;
+      const uint8 *fast = HuCPU.FastReadPage[page];
+      if(MDFN_LIKELY(fast != NULL))
+         return fast[A & 0x1FFF];
+
+      {
+         const uint8 wmpr = HuCPU.MPR[page];
+         return HuCPU.PCERead[wmpr]((wmpr << 13) | (A & 0x1FFF));
+      }
+   }
+#else
+   {
+      uint8 wmpr = HuCPU.MPR[A >> 13];
+      return HuCPU.PCERead[wmpr]((wmpr << 13) | (A & 0x1FFF));
+   }
+#endif
 }
 
 static INLINE uint16 RdMem16(unsigned int A)
 {
- uint16 ret;
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V6
+    * If both bytes are in one certified page, skip two callback/MPR
+    * lookups. Offset 0x1FFF falls back because A+1 crosses a page. */
+   {
+      const unsigned int off = A & 0x1FFF;
+      if(off != 0x1FFF)
+      {
+         const uint8 *fast = HuCPU.FastReadPage[A >> 13];
+         if(MDFN_LIKELY(fast != NULL))
+            return (uint16)(fast[off] | ((uint16)fast[off + 1] << 8));
+      }
+   }
+#endif
 
- ret = RdMem(A);
- ret |= RdMem(A + 1) << 8;
-
- return(ret);
+ {
+   uint16 ret;
+   ret = RdMem(A);
+   ret |= RdMem(A + 1) << 8;
+   return(ret);
+ }
 }
 
 static INLINE void WrMem(unsigned int A, uint8 V)
 {
-   uint8 wmpr = HuCPU.MPR[A >> 13];
- HuCPU.PCEWrite[wmpr]((wmpr << 13) | (A & 0x1FFF), V);
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V6
+    * Direct writes are certified only for plain RAM stores. */
+   {
+      const unsigned int page = A >> 13;
+      uint8 *fast = HuCPU.FastWritePage[page];
+      if(fast != NULL)
+      {
+         fast[A & 0x1FFF] = V;
+         return;
+      }
+
+      {
+         const uint8 wmpr = HuCPU.MPR[page];
+         HuCPU.PCEWrite[wmpr]((wmpr << 13) | (A & 0x1FFF), V);
+         return;
+      }
+   }
+#else
+   {
+      uint8 wmpr = HuCPU.MPR[A >> 13];
+      HuCPU.PCEWrite[wmpr]((wmpr << 13) | (A & 0x1FFF), V);
+   }
+#endif
 }
 
 static INLINE uint8 RdOp(unsigned int A)
@@ -575,7 +667,21 @@ void HuC6280_Run(int32 cycles)
 {
    int i;
    int32 next_event;
-   const int32 next_user_event = HuCPU.previous_next_user_event + cycles * pce_overclocked;
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V6
+    * pce_overclocked is configured at load. Cache it for this run.
+    * Aurora currently exposes multiplier 1x. */
+   const int32 aurora_oc = pce_overclocked;
+   const int32 aurora_scaled_cycles =
+      (aurora_oc == 1) ? cycles : (cycles * aurora_oc);
+   const int32 aurora_timer_period =
+      (aurora_oc == 1) ? 1024 : (1024 * aurora_oc);
+   const int32 next_user_event =
+      HuCPU.previous_next_user_event + aurora_scaled_cycles;
+#else
+   const int32 next_user_event =
+      HuCPU.previous_next_user_event + cycles * pce_overclocked;
+#endif
 
    HuCPU.previous_next_user_event = next_user_event;
 
@@ -673,7 +779,11 @@ void HuC6280_Run(int32 cycles)
 
          while(HuCPU.timestamp >= HuCPU.timer_next_timestamp)
          {
+#ifdef AURORA_PS2_PCE_FAST
+            HuCPU.timer_next_timestamp += aurora_timer_period;
+#else
             HuCPU.timer_next_timestamp += 1024 * pce_overclocked;
+#endif
 
             if(HuCPU.timer_status)
             {

@@ -226,6 +226,19 @@ static int32 need_vbi[2] = { 0, 0 };
 static int32 line_leadin1 = 0;
 static int32 magical, cyc_tot;
 
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_EXPERIMENTAL_V8
+ * Horizontal lead-in timing is a pure function of HSR/HDR/dot_clock.
+ * Cache those inputs; CPU writes during a line are still observed at the
+ * beginning of the next scanline, exactly where upstream recomputes them. */
+static uint16 aurora_line_timing_hsr;
+static uint16 aurora_line_timing_hdr;
+static uint8 aurora_line_timing_dot;
+static uint32 aurora_line_active_start;
+static uint32 aurora_line_active_width;
+static bool aurora_line_timing_valid = false;
+#endif
+
 vpc_t vpc;
 
 // Some virtual vdc macros to make code simpler to read
@@ -351,6 +364,14 @@ void MDFN_FASTCALL VDC_Write_ST(uint32 A, uint8 V)
 static void DoDMA(vdc_t *vdc)
 {
    int i;
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V7
+    * DCR cannot change while this DoDMA() call itself is executing, so the
+    * source/destination direction is invariant for all transfer iterations. */
+   const int aurora_source_step = (vdc->DCR & 0x4) ? -1 : 1;
+   const int aurora_dest_step   = (vdc->DCR & 0x8) ? -1 : 1;
+#endif
+
    // Assuming one cycle for reads, one cycle for write, with DMA?
    for(i = 0; i < 455; i++)
    {
@@ -360,13 +381,29 @@ static void DoDMA(vdc_t *vdc)
       {
          if(vdc->DESR < VRAM_Size)
          {
+#ifdef AURORA_PS2_PCE_FAST
+            /* Tile caches are pure derivatives of VRAM. Rewriting the same
+             * word cannot change their correct contents. */
+            if(vdc->VRAM[vdc->DESR] != vdc->DMAReadBuffer)
+            {
+               vdc->VRAM[vdc->DESR] = vdc->DMAReadBuffer;
+               FixTileCache(vdc, vdc->DESR);
+               vdc->spr_tile_clean[vdc->DESR >> 6] = 0;
+            }
+#else
             vdc->VRAM[vdc->DESR] = vdc->DMAReadBuffer;
             FixTileCache(vdc, vdc->DESR);
             vdc->spr_tile_clean[vdc->DESR >> 6] = 0;
+#endif
          }
 
+#ifdef AURORA_PS2_PCE_FAST
+         vdc->SOUR += aurora_source_step;
+         vdc->DESR += aurora_dest_step;
+#else
          vdc->SOUR += (((vdc->DCR & 0x4) >> 1) ^ 2) - 1;
          vdc->DESR += (((vdc->DCR & 0x8) >> 2) ^ 2) - 1;
+#endif
          vdc->LENR--;
          if(vdc->LENR == 0xFFFF)  // DMA is done.
          {
@@ -411,9 +448,26 @@ DECLFW(VDC_Write)
                                     while(vdc->DMARunning)
                                        DoDMA(vdc);
 
+#ifdef AURORA_PS2_PCE_FAST
+                                    {
+                                       /* AURORA_PCE_EXPERIMENTAL_V7
+                                        * MAWR progression is unchanged. Only derived-cache work
+                                        * is skipped when VRAM itself would remain identical. */
+                                       const uint16 aurora_new_word =
+                                          ((uint16)V << 8) | vdc->write_latch;
+
+                                       if(vdc->VRAM[vdc->MAWR] != aurora_new_word)
+                                       {
+                                          vdc->VRAM[vdc->MAWR] = aurora_new_word;
+                                          FixTileCache(vdc, vdc->MAWR);
+                                          vdc->spr_tile_clean[vdc->MAWR >> 6] = 0;
+                                       }
+                                    }
+#else
                                     vdc->VRAM[vdc->MAWR] = (V << 8) | vdc->write_latch;
                                     FixTileCache(vdc, vdc->MAWR);
                                     vdc->spr_tile_clean[vdc->MAWR >> 6] = 0;
+#endif
                                  } 
                                  vdc->MAWR += vram_inc_tab[(vdc->CR >> 11) & 0x3];
                               }
@@ -483,6 +537,25 @@ static NO_INLINE void DrawBG(const vdc_t *vdc, const uint32 count, uint8 *target
       if((vdc->MWR & 0x3) == 0x3)
          cg_mask = (vdc->MWR & 0x80) ? 0xCCCCCCCCCCCCCCCCULL : 0x3333333333333333ULL;
 
+#ifdef AURORA_PS2_PCE_FAST
+      {
+         /* AURORA_PCE_EXPERIMENTAL_V7
+          * DrawBG emits one uint64 == eight indexed pixels per iteration. */
+         const unsigned aurora_tile_count = (count + 7U) >> 3;
+         x = (int)aurora_tile_count;
+
+         while(x--)
+         {
+            const uint16 bat = BAT_Base[bat_boom];
+            const uint64 color_or = cblock_exlut[bat >> 12];
+
+            *target64 = (CG_Base[(bat & 0xFFF) * 8] & cg_mask) | color_or;
+
+            bat_boom = (bat_boom + 1) & bat_width_mask;
+            target64++;
+         }
+      }
+#else
       for(x = count - 1; x >= 0; x -= 8)
       {
          const uint16 bat = BAT_Base[bat_boom];
@@ -493,6 +566,7 @@ static NO_INLINE void DrawBG(const vdc_t *vdc, const uint32 count, uint8 *target
          bat_boom = (bat_boom + 1) & bat_width_mask;
          target64++;
       }
+#endif
    }
 }
 
@@ -503,6 +577,123 @@ static NO_INLINE void DrawBG(const vdc_t *vdc, const uint32 count, uint8 *target
 
 static const unsigned int sprite_height_tab[4] = { 16, 32, 64, 64 };
 static const unsigned int sprite_height_no_mask[4] = { ~0U, ~2U, ~6U, ~6U };
+
+
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_EXPERIMENTAL_V14_SPRITE_PSG
+ * Build sprite-line membership once when SAT is rebuilt instead of scanning
+ * all 64..128 expanded SAT units on every scanline.
+ */
+static INLINE void AuroraBuildSpriteLineCache(vdc_t *which_vdc)
+{
+   unsigned i;
+
+   memset(which_vdc->aurora_spr_line_count, 0,
+          sizeof(which_vdc->aurora_spr_line_count));
+
+   if(unlimited_sprites)
+      return;
+
+   for(i = 0; i < (unsigned)which_vdc->SAT_Cache_Valid; ++i)
+   {
+      const SAT_Cache_t *s = &which_vdc->SAT_Cache[i];
+      int first = (int)s->y;
+      int last = first + (int)s->height;
+      int line;
+
+      if(first < 0)
+         first = 0;
+      if(last > 1024)
+         last = 1024;
+      if(last <= first)
+         continue;
+
+      for(line = first; line < last; ++line)
+      {
+         uint8 count = which_vdc->aurora_spr_line_count[line];
+         if(count < 17)
+         {
+            which_vdc->aurora_spr_line_index[line][count] = (uint8)i;
+            which_vdc->aurora_spr_line_count[line] = count + 1;
+         }
+      }
+   }
+}
+
+/* Sprite-cache bytes are 0..15. Reject an all-transparent half in one
+ * 64-bit test; for an all-opaque half remove eight per-pixel transparency
+ * branches. Mixed rows retain the original scalar semantics.
+ */
+static INLINE bool AuroraSpriteChunkHasZero(uint64 v)
+{
+   return ((v - 0x0101010101010101ULL) &
+           ~v & 0x8080808080808080ULL) != 0;
+}
+
+static INLINE void AuroraDrawSprite8Forward(
+      uint16 *dst, const uint8 *src, const uint32 prio_or)
+{
+   uint64 packed;
+   memcpy(&packed, src, sizeof(packed));
+
+   if(!packed)
+      return;
+
+   if(!AuroraSpriteChunkHasZero(packed))
+   {
+      dst[0] = src[0] | prio_or;
+      dst[1] = src[1] | prio_or;
+      dst[2] = src[2] | prio_or;
+      dst[3] = src[3] | prio_or;
+      dst[4] = src[4] | prio_or;
+      dst[5] = src[5] | prio_or;
+      dst[6] = src[6] | prio_or;
+      dst[7] = src[7] | prio_or;
+   }
+   else
+   {
+      int x;
+      for(x = 0; x < 8; ++x)
+      {
+         const uint32 raw_pixel = src[x];
+         if(raw_pixel)
+            dst[x] = raw_pixel | prio_or;
+      }
+   }
+}
+
+static INLINE void AuroraDrawSprite8Reverse(
+      uint16 *dst, const uint8 *src, const uint32 prio_or)
+{
+   uint64 packed;
+   memcpy(&packed, src, sizeof(packed));
+
+   if(!packed)
+      return;
+
+   if(!AuroraSpriteChunkHasZero(packed))
+   {
+      dst[0] = src[7] | prio_or;
+      dst[1] = src[6] | prio_or;
+      dst[2] = src[5] | prio_or;
+      dst[3] = src[4] | prio_or;
+      dst[4] = src[3] | prio_or;
+      dst[5] = src[2] | prio_or;
+      dst[6] = src[1] | prio_or;
+      dst[7] = src[0] | prio_or;
+   }
+   else
+   {
+      int x;
+      for(x = 0; x < 8; ++x)
+      {
+         const uint32 raw_pixel = src[7 - x];
+         if(raw_pixel)
+            dst[x] = raw_pixel | prio_or;
+      }
+   }
+}
+#endif
 
 static INLINE void RebuildSATCache(vdc_t *vdc)
 {
@@ -559,13 +750,43 @@ static INLINE void RebuildSATCache(vdc_t *vdc)
          vdc->SAT_Cache_Valid++;
       }
    }
+
+#ifdef AURORA_PS2_PCE_FAST
+   AuroraBuildSpriteLineCache(vdc);
+#endif
 }
 
 static INLINE void DoSATDMA(vdc_t *vdc)
 {
-   unsigned i;
-   for(i = 0; i < 256; i++)
-      vdc->SAT[i] = vdc->VRAM[(vdc->SATB + i) & 0xFFFF];
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V7
+    * SATB is a 16-bit VRAM word address. Preserve the original &0xFFFF
+    * wrap exactly, but copy the 256 words in one or two contiguous blocks. */
+   const unsigned aurora_sat_base = (unsigned)vdc->SATB;
+   unsigned aurora_sat_first = 0x10000U - aurora_sat_base;
+
+   if(aurora_sat_first > 256U)
+      aurora_sat_first = 256U;
+
+   memcpy(
+      vdc->SAT,
+      &vdc->VRAM[aurora_sat_base],
+      aurora_sat_first * sizeof(vdc->SAT[0]));
+
+   if(aurora_sat_first < 256U)
+   {
+      memcpy(
+         vdc->SAT + aurora_sat_first,
+         &vdc->VRAM[0],
+         (256U - aurora_sat_first) * sizeof(vdc->SAT[0]));
+   }
+#else
+   {
+      unsigned i;
+      for(i = 0; i < 256; i++)
+         vdc->SAT[i] = vdc->VRAM[(vdc->SATB + i) & 0xFFFF];
+   }
+#endif
 
    RebuildSATCache(vdc);
 }
@@ -587,69 +808,109 @@ static NO_INLINE void DrawSprites(vdc_t *vdc, const int32 end, uint16 *spr_lineb
 {
    int i;
    int active_sprites = 0;
-   SPRLE SpriteList[64 * 2]; // (see unlimited_sprites option, *2 to accomodate 32-pixel-width sprites ) //16];
+   SPRLE SpriteList[64 * 2];
 
-   // First, grab the up to 16(or 128 for unlimited_sprites) sprite units(16xWHATEVER; each 32xWHATEVER sprite counts as 2 sprite units when
-   // rendering a scanline) for this scanline.
-   for(i = 0; i < vdc->SAT_Cache_Valid; i++)
+#ifdef AURORA_PS2_PCE_FAST
+   if(!unlimited_sprites && vdc->RCRCount < 1024)
    {
-      const SAT_Cache_t *SATR = &vdc->SAT_Cache[i];
+      const unsigned line = (unsigned)vdc->RCRCount;
+      const unsigned cached_count = vdc->aurora_spr_line_count[line];
+      unsigned render_count = cached_count;
 
-      int16 y = SATR->y;
-      uint16 x = SATR->x;
-      uint16 no = SATR->no;
-      const uint16 flags = SATR->flags;
-      const uint8 cgmode = SATR->cgmode;
-      const uint16 height = SATR->height;
-      const uint32 palette_index = (flags & 0xF) << 4;
-
-      uint32 y_offset = vdc->RCRCount - y;
-      if(y_offset < height)
+      if(render_count > 16)
       {
-         if(active_sprites == 16)
+         if(vdc->CR & 0x2)
          {
-            if(vdc->CR & 0x2)
-            {
-               vdc->status |= VDCS_OR;
-               HuC6280_IRQBegin(MDFN_IQIRQ1);
-            }
-            if(!unlimited_sprites)
-               break;
+            vdc->status |= VDCS_OR;
+            HuC6280_IRQBegin(MDFN_IQIRQ1);
          }
+         render_count = 16;
+      }
+
+      for(active_sprites = 0;
+          active_sprites < (int)render_count;
+          ++active_sprites)
+      {
+         const int sat_index =
+            vdc->aurora_spr_line_index[line][active_sprites];
+         const SAT_Cache_t *SATR = &vdc->SAT_Cache[sat_index];
+         uint32 y_offset = vdc->RCRCount - SATR->y;
+         uint16 no = SATR->no;
+         const uint16 flags = SATR->flags;
 
          if(flags & SPRF_VFLIP)
-            y_offset = height - 1 - y_offset;
+            y_offset = SATR->height - 1 - y_offset;
 
          no |= (y_offset & 0x30) >> 3;
 
-         SpriteList[active_sprites].flags = flags;
-
-         SpriteList[active_sprites].x = x;
-         SpriteList[active_sprites].palette_index = palette_index;
-
+         SpriteList[active_sprites].flags =
+            flags | (sat_index ? 0 : SPRF_SPRITE0);
+         SpriteList[active_sprites].x = SATR->x;
+         SpriteList[active_sprites].palette_index =
+            (uint8)((flags & 0xF) << 4);
          SpriteList[active_sprites].no = no;
-         SpriteList[active_sprites].sub_y = (y_offset & 15);
+         SpriteList[active_sprites].sub_y = (uint16)(y_offset & 15);
 
+         CheckFixSpriteTileCache(
+            vdc, no, (vdc->MWR & 0xC) | SATR->cgmode);
+      }
+   }
+   else
+#endif
+   {
+      /* Original generic/unlimited SAT scan. */
+      for(i = 0; i < vdc->SAT_Cache_Valid; i++)
+      {
+         const SAT_Cache_t *SATR = &vdc->SAT_Cache[i];
+         int16 y = SATR->y;
+         uint16 x = SATR->x;
+         uint16 no = SATR->no;
+         const uint16 flags = SATR->flags;
+         const uint8 cgmode = SATR->cgmode;
+         const uint16 height = SATR->height;
+         const uint32 palette_index = (flags & 0xF) << 4;
+         uint32 y_offset = vdc->RCRCount - y;
 
-         CheckFixSpriteTileCache(vdc, no, (vdc->MWR & 0xC) | cgmode);
+         if(y_offset < height)
+         {
+            if(active_sprites == 16)
+            {
+               if(vdc->CR & 0x2)
+               {
+                  vdc->status |= VDCS_OR;
+                  HuC6280_IRQBegin(MDFN_IQIRQ1);
+               }
+               if(!unlimited_sprites)
+                  break;
+            }
 
-         SpriteList[active_sprites].flags |= i ? 0 : SPRF_SPRITE0;
+            if(flags & SPRF_VFLIP)
+               y_offset = height - 1 - y_offset;
 
-         active_sprites++;
+            no |= (y_offset & 0x30) >> 3;
+
+            SpriteList[active_sprites].flags = flags | (i ? 0 : SPRF_SPRITE0);
+            SpriteList[active_sprites].x = x;
+            SpriteList[active_sprites].palette_index = palette_index;
+            SpriteList[active_sprites].no = no;
+            SpriteList[active_sprites].sub_y = y_offset & 15;
+
+            CheckFixSpriteTileCache(vdc, no, (vdc->MWR & 0xC) | cgmode);
+            active_sprites++;
+         }
       }
    }
 
-   MDFN_FastU32MemsetM8((uint32 *)spr_linebuf, 0, ((end + 3) >> 1) & ~1);
+   MDFN_FastU32MemsetM8(
+      (uint32 *)spr_linebuf, 0, ((end + 3) >> 1) & ~1);
 
    if(!active_sprites)
       return;
 
-   for(i = (active_sprites - 1) ; i >= 0; i--)
+   for(i = active_sprites - 1; i >= 0; --i)
    {
-      int increment  = -1;
-      int32 x_second = 15;
       const uint8 *pix_source;
-      int32 pos = SpriteList[i].x - 0x20;
+      const int32 pos = (int32)SpriteList[i].x - 0x20;
       uint32 prio_or;
       uint16 *dest_pix;
 
@@ -657,29 +918,33 @@ static NO_INLINE void DrawSprites(vdc_t *vdc, const int32 end, uint16 *spr_lineb
          continue;
 
       dest_pix = &spr_linebuf[pos];
-
       prio_or = 0x100 | SpriteList[i].palette_index;
 
       if(SpriteList[i].flags & SPRF_PRIORITY)
          prio_or |= SPR_HPMASK;
 
-      pix_source     = vdc->spr_tile_cache[SpriteList[i].no][SpriteList[i].sub_y];
-
-      if(SpriteList[i].flags & SPRF_HFLIP)
-      {
-         increment = 1;
-         x_second = 0;
-      }
+      pix_source =
+         vdc->spr_tile_cache[SpriteList[i].no][SpriteList[i].sub_y];
 
       if((SpriteList[i].flags & SPRF_SPRITE0) && (vdc->CR & 0x01))
       {
+         /* Keep collision-IRQ ordering and bounds exactly scalar. */
+         int increment = -1;
+         int32 x_second = 15;
          int32 x;
+
+         if(SpriteList[i].flags & SPRF_HFLIP)
+         {
+            increment = 1;
+            x_second = 0;
+         }
+
          for(x = 0; x < 16; x++, x_second += increment)
          {
             const uint32 raw_pixel = pix_source[x_second];
             if(raw_pixel)
             {
-               if(((uint32)pos + x) >= (uint32)end) // Covers negative and overflowing the right side(to prevent spurious sprite hits)   
+               if(((uint32)pos + x) >= (uint32)end)
                   continue;
 
                if(dest_pix[x] & 0x100)
@@ -690,12 +955,30 @@ static NO_INLINE void DrawSprites(vdc_t *vdc, const int32 end, uint16 *spr_lineb
                dest_pix[x] = raw_pixel | prio_or;
             }
          }
-      } // End sprite0 handling
-      else // No sprite0 hit:
+      }
+      else
       {
+#ifdef AURORA_PS2_PCE_FAST
+         if(SpriteList[i].flags & SPRF_HFLIP)
+         {
+            AuroraDrawSprite8Forward(dest_pix, pix_source, prio_or);
+            AuroraDrawSprite8Forward(dest_pix + 8, pix_source + 8, prio_or);
+         }
+         else
+         {
+            AuroraDrawSprite8Reverse(dest_pix, pix_source + 8, prio_or);
+            AuroraDrawSprite8Reverse(dest_pix + 8, pix_source, prio_or);
+         }
+#else
+         int increment = -1;
+         int32 x_second = 15;
          int32 x;
-         // x must be signed, for "pos + x" to not be promoted to unsigned, which will cause a stack overflow.
-         //
+
+         if(SpriteList[i].flags & SPRF_HFLIP)
+         {
+            increment = 1;
+            x_second = 0;
+         }
 
          for(x = 0; x < 16; x++, x_second += increment)
          {
@@ -703,21 +986,65 @@ static NO_INLINE void DrawSprites(vdc_t *vdc, const int32 end, uint16 *spr_lineb
             if(raw_pixel)
                dest_pix[x] = raw_pixel | prio_or;
          }
-
-      } // End no sprite0 hit
+#endif
+      }
    }
 }
 
 static INLINE void MixBGSPR(const uint32 count_in, const uint8 *bg_linebuf_in, const uint16 *spr_linebuf_in, uint16_t *target_in)
-{   
-   unsigned int x;
-   for(x = 0; x < count_in; x++)
+{
+   unsigned int x = 0;
+
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V14_SPRITE_PSG
+    * Transparent 4-pixel chunks bypass four sprite-priority tests.
+    */
+   for(; x + 3 < count_in; x += 4)
+   {
+      uint64 spr4;
+      memcpy(&spr4, spr_linebuf_in + x, sizeof(spr4));
+
+      if(!spr4)
+      {
+         const uint32 b0 = bg_linebuf_in[x + 0];
+         const uint32 b1 = bg_linebuf_in[x + 1];
+         const uint32 b2 = bg_linebuf_in[x + 2];
+         const uint32 b3 = bg_linebuf_in[x + 3];
+
+         target_in[x + 0] =
+            vce.color_table_cache[(b0 & 0x0F) ? b0 : 0];
+         target_in[x + 1] =
+            vce.color_table_cache[(b1 & 0x0F) ? b1 : 0];
+         target_in[x + 2] =
+            vce.color_table_cache[(b2 & 0x0F) ? b2 : 0];
+         target_in[x + 3] =
+            vce.color_table_cache[(b3 & 0x0F) ? b3 : 0];
+      }
+      else
+      {
+         unsigned k;
+         for(k = 0; k < 4; ++k)
+         {
+            const uint32 bg_pixel = bg_linebuf_in[x + k];
+            const uint32 spr_pixel = spr_linebuf_in[x + k];
+            uint32 pixel = bg_pixel;
+
+            if((spr_pixel & SPR_HPMASK) || !(bg_pixel & 0x0F))
+               pixel = spr_pixel;
+
+            target_in[x + k] = vce.color_table_cache[pixel & 0x1FF];
+         }
+      }
+   }
+#endif
+
+   for(; x < count_in; ++x)
    {
       const uint32 bg_pixel = bg_linebuf_in[x];
       const uint32 spr_pixel = spr_linebuf_in[x];
       uint32 pixel = bg_pixel;
 
-      if ((spr_pixel & SPR_HPMASK) || !(bg_pixel & 0x0F))
+      if((spr_pixel & SPR_HPMASK) || !(bg_pixel & 0x0F))
          pixel = spr_pixel;
 
       target_in[x] = vce.color_table_cache[pixel & 0x1FF];
@@ -801,6 +1128,46 @@ void VDC_RunFrame(EmulateSpecStruct *espec, bool IsHES)
 
       need_vbi[0] = need_vbi[1] = 0;
 
+#ifdef AURORA_PS2_PCE_FAST
+      if(MDFN_UNLIKELY(
+            !aurora_line_timing_valid ||
+            aurora_line_timing_hsr != vdc->HSR ||
+            aurora_line_timing_hdr != vdc->HDR ||
+            aurora_line_timing_dot != vce.dot_clock))
+      {
+         /* AURORA_PCE_EXPERIMENTAL_V8
+          * This is the exact upstream calculation, merely moved behind an
+          * input-change test. */
+         line_leadin1 = 0;
+
+         magical = M_vdc_HDS + (M_vdc_HDW + 1) + M_vdc_HDE;
+         magical = (magical + 2) & ~1;
+         magical -= M_vdc_HDW + 1;
+         cyc_tot = magical * 8;
+         cyc_tot -= 2;
+         switch(vce.dot_clock)
+         {
+            case 0: cyc_tot = 4 * cyc_tot / 3; break;
+            case 1: break;
+            case 2: cyc_tot = 2 * cyc_tot / 3; break;
+         }
+
+         if(cyc_tot < 0)
+            cyc_tot = 0;
+
+         line_leadin1 = cyc_tot;
+
+         /* AURORA_PCE_EXPERIMENTAL_V9
+          * Same HSR/HDR invalidation domain as line_leadin1. */
+         aurora_line_active_start = (M_vdc_HDS + 1) * 8;
+         aurora_line_active_width = (M_vdc_HDW + 1) * 8;
+
+         aurora_line_timing_hsr = vdc->HSR;
+         aurora_line_timing_hdr = vdc->HDR;
+         aurora_line_timing_dot = vce.dot_clock;
+         aurora_line_timing_valid = true;
+      }
+#else
 #if 1
       line_leadin1 = 0;
 
@@ -818,6 +1185,7 @@ void VDC_RunFrame(EmulateSpecStruct *espec, bool IsHES)
 
       if(cyc_tot < 0) cyc_tot = 0;
       line_leadin1 = cyc_tot;
+#endif
 #endif
 
       if(max_dc < vce.dot_clock)
@@ -914,8 +1282,13 @@ void VDC_RunFrame(EmulateSpecStruct *espec, bool IsHES)
 
             if(fc_vrm)
             {
+#ifdef AURORA_PS2_PCE_FAST
+               const uint32 start = aurora_line_active_start;
+               const uint32 end = start + aurora_line_active_width;
+#else
                uint32 start = (M_vdc_HDS + 1) * 8;
                uint32 end = start + (M_vdc_HDW + 1) * 8;
+#endif
 
                if((vdc->CR & 0x80) && SHOULD_DRAW)
                {
@@ -1054,7 +1427,26 @@ void VDC_RunFrame(EmulateSpecStruct *espec, bool IsHES)
          }
       }
 
-      frame_counter = (frame_counter + 1) % (vce.lc263 ? 263 : 262);
+#ifdef AURORA_PS2_PCE_FAST
+      {
+         /* AURORA_PCE_EXPERIMENTAL_V7
+          * Valid states need only increment/compare. Keep a modulo fallback
+          * for an out-of-range frame_counter so behavior stays defined as
+          * in the original expression. */
+         const unsigned aurora_frame_lines = vce.lc263 ? 263U : 262U;
+         frame_counter++;
+
+         if(MDFN_UNLIKELY(frame_counter >= aurora_frame_lines))
+         {
+            if(frame_counter == aurora_frame_lines)
+               frame_counter = 0;
+            else
+               frame_counter %= aurora_frame_lines;
+         }
+      }
+#else
+      frame_counter = (frame_counter + 1U) % (vce.lc263 ? 263U : 262U);
+#endif
    } while(frame_counter != VBlankFL); // big frame loop!
 
 	DisplayRect->w = defined_width[vce.dot_clock];
@@ -1062,6 +1454,10 @@ void VDC_RunFrame(EmulateSpecStruct *espec, bool IsHES)
 
 void VDC_Reset(void)
 {
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V8 */
+   aurora_line_timing_valid = false;
+#endif
    vdc->read_buffer = 0xFFFF;
 
    vpc.priority[0] = vpc.priority[1] = 0x11;

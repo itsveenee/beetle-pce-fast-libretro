@@ -99,6 +99,17 @@ typedef struct
    int SAT_Cache_Valid;          // 64 through 128, depending on the number of 32-pixel-wide sprites.
    SAT_Cache_t SAT_Cache[128];     //64];
 
+
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V14_SPRITE_PSG
+    * First 17 eligible 16px sprite units per RCR line:
+    * 16 visible hardware units + one overflow witness.
+    * Unlimited-sprites mode falls back to the original SAT scan.
+    */
+   uint8 aurora_spr_line_count[1024];
+   uint8 aurora_spr_line_index[1024][17];
+#endif
+
    uint16 SAT[0x100];
 
    uint16 VRAM[65536];	//VRAM_Size];

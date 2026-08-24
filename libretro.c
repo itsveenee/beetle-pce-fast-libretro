@@ -711,7 +711,9 @@ static DECLFW(BaseRAMWrite_Mirrored)
 static DECLFR(IORead)
 {
 #if defined(__GNUC__) || defined(__clang__) || defined(__ICC) || defined(__INTEL_COMPILER) 
-   const void * const IOReadHandlers[0x20] =
+   /* AURORA_PCE_EXPERIMENTAL_V6
+    * GCC labels-as-values support a static dispatch table. */
+   static const void * const IOReadHandlers[0x20] =
    {
       &&VDC_00, &&VDC_01, &&VDC_02, &&VDC_03,
       &&VCE_00, &&VCE_01, &&VCE_02, &&VCE_03,
@@ -842,7 +844,19 @@ static DECLFW(IOWrite)
          break;
       case 2:
          PCEIODataBuffer = V;
+#ifdef AURORA_PS2_PCE_FAST
+         /* AURORA_PCE_EXPERIMENTAL_V6
+          * Preserve generic behavior for any multiplier != 1, but avoid
+          * integer DIV for Aurora's current 1x setting. */
+         PCEFast_PSG_Write(
+            psg,
+            (pce_overclocked == 1)
+               ? HuCPU.timestamp
+               : (HuCPU.timestamp / pce_overclocked),
+            A, V);
+#else
          PCEFast_PSG_Write(psg, HuCPU.timestamp / pce_overclocked, A, V);
+#endif
          break;
       case 3:
          PCEIODataBuffer = V;
@@ -951,6 +965,10 @@ static int HuCLoad(const uint8 *data, uint32 len, uint32 crc32)
    {
       HuCPU.FastMap[x] = &ROMSpace[x * 8192];
       HuCPU.PCERead[x] = HuCRead;
+#ifdef AURORA_PS2_PCE_FAST
+      /* AURORA_PCE_EXPERIMENTAL_V5: HuCRead is exactly ROMSpace[A]. */
+      HuCPU.FastRead[x] = &ROMSpace[x * 8192];
+#endif
    }
 
    /* m_len always rounds up to a minimum of 8192, which exceeds the read
@@ -970,6 +988,11 @@ static int HuCLoad(const uint8 *data, uint32 len, uint32 crc32)
          HuCPU.FastMap[x] = &PopRAM[(x & 3) * 8192];
          HuCPU.PCERead[x] = HuCRead;
          HuCPU.PCEWrite[x] = HuCRAMWrite;
+#ifdef AURORA_PS2_PCE_FAST
+         /* AURORA_PCE_EXPERIMENTAL_V6
+          * HuCRAMWrite is exactly ROMSpace[A] = V for these banks. */
+         HuCPU.FastWrite[x] = &ROMSpace[x * 8192];
+#endif
       }
       MDFNMP_AddRAM(32768, 0x40 * 8192, PopRAM);
    }
@@ -989,7 +1012,15 @@ static int HuCLoad(const uint8 *data, uint32 len, uint32 crc32)
    if(sf2_mapper)
    {
       for(x = 0x40; x < 0x80; x++)
+      {
          HuCPU.PCERead[x] = HuCSF2Read;
+#ifdef AURORA_PS2_PCE_FAST
+         /* AURORA_PCE_EXPERIMENTAL_V6
+          * SF2 mapper semantics must stay on callbacks. */
+         HuCPU.FastRead[x] = NULL;
+         HuCPU.FastWrite[x] = NULL;
+#endif
+      }
       HuCPU.PCEWrite[0] = HuCSF2Write;
       HuCSF2Latch = 0;
    }
@@ -1065,6 +1096,20 @@ static int LoadCommon(void)
 
       for(x = 0xf8; x < 0xfb; x++)
          HuCPU.FastMap[x] = &BaseRAM[0];
+
+#ifdef AURORA_PS2_PCE_FAST
+      /* AURORA_PCE_EXPERIMENTAL_V6
+       * BaseRAM callbacks are plain accesses to the same mirrored 8 KiB
+       * PCE RAM window. */
+      HuCPU.FastRead[0xF8] = BaseRAM;
+      HuCPU.FastRead[0xF9] = BaseRAM;
+      HuCPU.FastRead[0xFA] = BaseRAM;
+      HuCPU.FastRead[0xFB] = BaseRAM;
+      HuCPU.FastWrite[0xF8] = BaseRAM;
+      HuCPU.FastWrite[0xF9] = BaseRAM;
+      HuCPU.FastWrite[0xFA] = BaseRAM;
+      HuCPU.FastWrite[0xFB] = BaseRAM;
+#endif
 
       HuCPU.PCERead[0xFF] = IORead;
    }
@@ -1345,6 +1390,74 @@ static void Emulate(EmulateSpecStruct *espec)
    * one full buffer past the end. Harmless in practice (a frame yields
    * ~735 stereo samples) but an incorrect bound. */
   const long max_frames = (long)(sizeof(sound_buf) / sizeof(sound_buf[0]) / 2);
+#ifdef AURORA_PS2_PCE_FAST
+  /* AURORA_PCE_V14_STEREO_BLIP_READ
+   * Read the synchronized L/R Blip buffers in one contiguous interleaved pass.
+   * If a future core change ever desynchronizes their available counts, fall
+   * back to the original independent readers.
+   */
+  {
+     const blip_time_t frame_time =
+        HuCPU.timestamp / pce_overclocked;
+     long left_avail, right_avail;
+
+     Blip_Buffer_end_frame(&sbuf[0], frame_time);
+     Blip_Buffer_end_frame(&sbuf[1], frame_time);
+
+     left_avail = Blip_Buffer_samples_avail(&sbuf[0]);
+     right_avail = Blip_Buffer_samples_avail(&sbuf[1]);
+
+     if(MDFN_LIKELY(left_avail == right_avail))
+     {
+        long count = left_avail;
+
+        if(count > max_frames)
+           count = max_frames;
+
+        if(count)
+        {
+           int const bass_l = BLIP_READER_BASS(sbuf[0]);
+           int const bass_r = BLIP_READER_BASS(sbuf[1]);
+           BLIP_READER_BEGIN(aurora_l, sbuf[0]);
+           BLIP_READER_BEGIN(aurora_r, sbuf[1]);
+           blip_sample_t *out = espec->SoundBuf;
+           long n;
+
+           for(n = count; n; --n)
+           {
+              blip_long sl = BLIP_READER_READ(aurora_l);
+              blip_long sr = BLIP_READER_READ(aurora_r);
+
+              if((blip_sample_t)sl != sl)
+                 sl = 0x7FFF - (sl >> 24);
+              if((blip_sample_t)sr != sr)
+                 sr = 0x7FFF - (sr >> 24);
+
+              *out++ = (blip_sample_t)sl;
+              *out++ = (blip_sample_t)sr;
+
+              BLIP_READER_NEXT(aurora_l, bass_l);
+              BLIP_READER_NEXT(aurora_r, bass_r);
+           }
+
+           BLIP_READER_END(aurora_l, sbuf[0]);
+           BLIP_READER_END(aurora_r, sbuf[1]);
+
+           Blip_Buffer_remove_samples(&sbuf[0], count);
+           Blip_Buffer_remove_samples(&sbuf[1], count);
+        }
+
+        espec->SoundBufSize = count;
+     }
+     else
+     {
+        for(y = 0; y < 2; y++)
+           espec->SoundBufSize =
+              Blip_Buffer_read_samples(
+                 &sbuf[y], espec->SoundBuf + y, max_frames);
+     }
+  }
+#else
   for(y = 0; y < 2; y++)
   {
      Blip_Buffer_end_frame(&sbuf[y], HuCPU.timestamp / pce_overclocked);
@@ -1352,6 +1465,7 @@ static void Emulate(EmulateSpecStruct *espec)
 		     espec->SoundBuf + y,
 		     max_frames);
   }
+#endif
  }
 
  INPUT_FixTS();
@@ -2288,7 +2402,7 @@ bool retro_load_game(const struct retro_game_info *info)
    for(y = 0; y < 2; y++)
    {
      Blip_Buffer_set_sample_rate(&sbuf[y],
-           44100, 50);
+           32000, 50); /* AURORA_PCE_EXPERIMENTAL_V3 */
      Blip_Buffer_set_clock_rate(&sbuf[y], (long)(PCE_MASTER_CLOCK / 3));
      Blip_Buffer_bass_freq(&sbuf[y], 10);
    }
@@ -2621,7 +2735,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
 {
    memset(info, 0, sizeof(*info));
    info->timing.fps            = MEDNAFEN_CORE_TIMING_FPS;
-   info->timing.sample_rate    = 44100;
+   info->timing.sample_rate    = 32000; /* AURORA_PCE_EXPERIMENTAL_V3 */
    info->geometry.base_width   = MEDNAFEN_CORE_GEOMETRY_BASE_W;
    info->geometry.base_height  = MEDNAFEN_CORE_GEOMETRY_BASE_H;
    info->geometry.max_width    = MEDNAFEN_CORE_GEOMETRY_MAX_W;
@@ -2649,7 +2763,7 @@ void retro_deinit(void)
                MEDNAFEN_CORE_NAME, (double)audio_frames / video_frames);
       if (audio_frames)
          log_cb(RETRO_LOG_INFO, "[%s]: Estimated FPS: %.5f\n",
-               MEDNAFEN_CORE_NAME, (double)video_frames * 44100 / audio_frames);
+               MEDNAFEN_CORE_NAME, (double)video_frames * 32000 / audio_frames);
    }
 
    libretro_supports_option_categories = false;

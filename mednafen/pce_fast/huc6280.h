@@ -52,6 +52,23 @@ struct HuC6280
 
 	uint8 *FastMap[0x100];
 
+#ifdef AURORA_PS2_PCE_FAST
+	/* AURORA_PCE_EXPERIMENTAL_V6
+	 *
+	 * Physical-bank certification:
+	 *   FastRead/FastWrite[physical bank]
+	 *
+	 * Current logical-MPR-page cache:
+	 *   FastReadPage/FastWritePage[logical page 0..8]
+	 *
+	 * NULL always means "use the original callback". Only memory with
+	 * no callback side effects is ever certified direct. */
+	uint8 *FastRead[0x100];
+	uint8 *FastWrite[0x100];
+	uint8 *FastReadPage[9];
+	uint8 *FastWritePage[9];
+#endif
+
 	readfunc PCERead[0x100];
 	writefunc PCEWrite[0x100];
 };

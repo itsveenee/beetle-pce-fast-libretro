@@ -29,6 +29,42 @@
  * by RecalcUOFunc and RunChannel before their definitions). */
 static void PCEFast_PSG_UpdateOutput_Off(PCEFast_PSG *psg, const int32 timestamp, struct psg_channel *ch);
 static void PCEFast_PSG_UpdateOutput_Accum(PCEFast_PSG *psg, const int32 timestamp, struct psg_channel *ch);
+
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_EXPERIMENTAL_V14_SPRITE_PSG
+ * L/R Blip buffers in this core are initialized with the same sample/clock
+ * rate, ended at the same source timestamp, and drained by the same count.
+ * Their resampled timebase is identical: perform the 64-bit timestamp
+ * multiplication once for the stereo transition.
+ */
+static INLINE void PCEFast_PSG_BlipStereo(
+      PCEFast_PSG *psg, const int32 timestamp,
+      const int delta0, const int delta1)
+{
+   blip_resampled_time_t rt;
+
+   if(MDFN_LIKELY((delta0 | delta1) == 0))
+      return;
+
+   rt = Blip_Buffer_resampled_time(psg->sbuf[0], timestamp);
+
+   if(delta0)
+      Blip_Synth_offset_resampled(
+         &psg->Synth, rt, delta0, psg->sbuf[0]);
+   if(delta1)
+      Blip_Synth_offset_resampled(
+         &psg->Synth, rt, delta1, psg->sbuf[1]);
+}
+#else
+static INLINE void PCEFast_PSG_BlipStereo(
+      PCEFast_PSG *psg, const int32 timestamp,
+      const int delta0, const int delta1)
+{
+   Blip_Synth_offset(&psg->Synth, timestamp, delta0, psg->sbuf[0]);
+   Blip_Synth_offset(&psg->Synth, timestamp, delta1, psg->sbuf[1]);
+}
+#endif
+
 static void PCEFast_PSG_UpdateOutput_Norm(PCEFast_PSG *psg, const int32 timestamp, struct psg_channel *ch);
 static void PCEFast_PSG_UpdateOutput_Noise(PCEFast_PSG *psg, const int32 timestamp, struct psg_channel *ch);
 static void PCEFast_PSG_RecalcUOFunc(PCEFast_PSG *psg, int chnum);
@@ -36,6 +72,21 @@ static void PCEFast_PSG_RecalcFreqCache(PCEFast_PSG *psg, int chnum);
 static void PCEFast_PSG_RecalcNoiseFreqCache(PCEFast_PSG *psg, int chnum);
 static void PCEFast_PSG_Update(PCEFast_PSG *psg, int32 timestamp);
 static int32 PCEFast_PSG_GetVL(PCEFast_PSG *psg, const int chnum, const int lr);
+
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_EXPERIMENTAL_V9
+ * Blip_Synth_offset_resampled() is additive. A zero delta leaves both
+ * touched buffer cells unchanged, so skip all timestamp/phase/buffer work. */
+#define PCEFAST_PSG_BLIP_IF_DELTA(psg_, ts_, delta_, buf_) \
+   do { \
+      const int aurora_delta_ = (delta_); \
+      if(MDFN_LIKELY(aurora_delta_ != 0)) \
+         Blip_Synth_offset(&(psg_)->Synth, (ts_), aurora_delta_, (buf_)); \
+   } while(0)
+#else
+#define PCEFAST_PSG_BLIP_IF_DELTA(psg_, ts_, delta_, buf_) \
+   Blip_Synth_offset(&(psg_)->Synth, (ts_), (delta_), (buf_))
+#endif
 
 void PCEFast_PSG_SetVolume(PCEFast_PSG *psg, double new_volume)
 {
@@ -71,8 +122,7 @@ static void PCEFast_PSG_UpdateOutput_Norm(PCEFast_PSG *psg, const int32 timestam
        delta1 = samp[1] - ch->blip_prev_samp[1];
    }
 
-   Blip_Synth_offset(&psg->Synth, timestamp, delta0, psg->sbuf[0]);
-   Blip_Synth_offset(&psg->Synth, timestamp, delta1, psg->sbuf[1]);
+   PCEFast_PSG_BlipStereo(psg, timestamp, delta0, delta1);
 
    ch->blip_prev_samp[0] = samp[0];
    ch->blip_prev_samp[1] = samp[1];
@@ -97,8 +147,7 @@ static void PCEFast_PSG_UpdateOutput_Noise(PCEFast_PSG *psg, const int32 timesta
        delta1 = samp[1] - ch->blip_prev_samp[1];
    }
 
-   Blip_Synth_offset(&psg->Synth, timestamp, delta0, psg->sbuf[0]);
-   Blip_Synth_offset(&psg->Synth, timestamp, delta1, psg->sbuf[1]);
+   PCEFast_PSG_BlipStereo(psg, timestamp, delta0, delta1);
 
    ch->blip_prev_samp[0] = samp[0];
    ch->blip_prev_samp[1] = samp[1];
@@ -106,6 +155,14 @@ static void PCEFast_PSG_UpdateOutput_Noise(PCEFast_PSG *psg, const int32 timesta
 
 static void PCEFast_PSG_UpdateOutput_Off(PCEFast_PSG *psg, const int32 timestamp, struct psg_channel *ch)
 {
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V9
+    * Off output with an already-zero previous sample changes no state. */
+   if(MDFN_LIKELY(
+         ch->blip_prev_samp[0] == 0 &&
+         ch->blip_prev_samp[1] == 0))
+      return;
+#endif
    int32 samp[2];
    int delta0;
    int delta1;
@@ -121,8 +178,7 @@ static void PCEFast_PSG_UpdateOutput_Off(PCEFast_PSG *psg, const int32 timestamp
        delta1 = samp[1] - ch->blip_prev_samp[1];
    }
 
-   Blip_Synth_offset(&psg->Synth, timestamp, delta0, psg->sbuf[0]);
-   Blip_Synth_offset(&psg->Synth, timestamp, delta1, psg->sbuf[1]);
+   PCEFast_PSG_BlipStereo(psg, timestamp, delta0, delta1);
 
    ch->blip_prev_samp[0] = samp[0];
    ch->blip_prev_samp[1] = samp[1];
@@ -147,12 +203,78 @@ static void PCEFast_PSG_UpdateOutput_Accum(PCEFast_PSG *psg, const int32 timesta
        delta1 = samp[1] - ch->blip_prev_samp[1];
    }
 
-   Blip_Synth_offset(&psg->Synth, timestamp, delta0, psg->sbuf[0]);
-   Blip_Synth_offset(&psg->Synth, timestamp, delta1, psg->sbuf[1]);
+   PCEFast_PSG_BlipStereo(psg, timestamp, delta0, delta1);
 
    ch->blip_prev_samp[0] = samp[0];
    ch->blip_prev_samp[1] = samp[1];
 }
+
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_EXPERIMENTAL_V8 */
+enum
+{
+   AURORA_PSG_UO_OFF = 0,
+   AURORA_PSG_UO_ACCUM,
+   AURORA_PSG_UO_NORM,
+   AURORA_PSG_UO_NOISE
+};
+
+static INLINE void PCEFast_PSG_CallOutput(
+      PCEFast_PSG *psg,
+      const int32 timestamp,
+      struct psg_channel *ch)
+{
+   switch(ch->aurora_update_mode)
+   {
+      case AURORA_PSG_UO_OFF:
+         PCEFast_PSG_UpdateOutput_Off(psg, timestamp, ch);
+         break;
+      case AURORA_PSG_UO_ACCUM:
+         PCEFast_PSG_UpdateOutput_Accum(psg, timestamp, ch);
+         break;
+      case AURORA_PSG_UO_NOISE:
+         PCEFast_PSG_UpdateOutput_Noise(psg, timestamp, ch);
+         break;
+      case AURORA_PSG_UO_NORM:
+      default:
+         PCEFast_PSG_UpdateOutput_Norm(psg, timestamp, ch);
+         break;
+   }
+}
+
+/* Called only by the existing high-frequency shortcut, where divisor is
+ * guaranteed <= 10 and positive. Constant divisors allow GCC to avoid a
+ * variable hardware divide on R5900. */
+static INLINE int32 PCEFast_PSG_DivSmallNonNegative(
+      const int32 numerator,
+      const uint32 divisor)
+{
+   switch(divisor)
+   {
+      case 1:  return numerator;
+      case 2:  return numerator / 2;
+      case 3:  return numerator / 3;
+      case 4:  return numerator / 4;
+      case 5:  return numerator / 5;
+      case 6:  return numerator / 6;
+      case 7:  return numerator / 7;
+      case 8:  return numerator / 8;
+      case 9:  return numerator / 9;
+      case 10: return numerator / 10;
+      default: return numerator / (int32)divisor;
+   }
+}
+
+#define PCEFAST_PSG_CALL_OUTPUT(psg_, ts_, ch_) \
+   PCEFast_PSG_CallOutput((psg_), (ts_), (ch_))
+#define PCEFAST_PSG_IS_NOISE(ch_) \
+   ((ch_)->aurora_update_mode == AURORA_PSG_UO_NOISE)
+#else
+#define PCEFAST_PSG_CALL_OUTPUT(psg_, ts_, ch_) \
+   ((ch_)->UpdateOutput((psg_), (ts_), (ch_)))
+#define PCEFAST_PSG_IS_NOISE(ch_) \
+   (PCEFast_PSG_UpdateOutput_Noise == (ch_)->UpdateOutput)
+#endif
 
 /* This function should always be called after RecalcFreqCache() (it's not
  * called from RecalcFreqCache to avoid redundant code) */
@@ -172,6 +294,20 @@ static void PCEFast_PSG_RecalcUOFunc(PCEFast_PSG *psg, int chnum)
       ch->UpdateOutput = PCEFast_PSG_UpdateOutput_Accum;
    else
       ch->UpdateOutput = PCEFast_PSG_UpdateOutput_Norm;
+
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V8
+    * Preserve the original selection logic above verbatim, then mirror the
+    * selected function into a compact dispatch mode. */
+   if(ch->UpdateOutput == PCEFast_PSG_UpdateOutput_Off)
+      ch->aurora_update_mode = AURORA_PSG_UO_OFF;
+   else if(ch->UpdateOutput == PCEFast_PSG_UpdateOutput_Accum)
+      ch->aurora_update_mode = AURORA_PSG_UO_ACCUM;
+   else if(ch->UpdateOutput == PCEFast_PSG_UpdateOutput_Noise)
+      ch->aurora_update_mode = AURORA_PSG_UO_NOISE;
+   else
+      ch->aurora_update_mode = AURORA_PSG_UO_NORM;
+#endif
 }
 
 
@@ -419,37 +555,55 @@ void PCEFast_PSG_Write(PCEFast_PSG *psg, int32 timestamp, uint8 A, uint8 V)
 
 /* Was template<bool LFO_On>; LFO_On is now a plain parameter. Not INLINE
  * due to the (mutual) recursion through RunChannel(... , false). */
-static void PCEFast_PSG_RunChannel(PCEFast_PSG *psg, int chc, int32 timestamp, bool LFO_On)
+/* AURORA_PCE_EXPERIMENTAL_V14_SPRITE_PSG
+ * PSP-lineage specialization: remove the LFO_On test from the common waveform
+ * loop. Keep Aurora V8/V9 direct output dispatch and exact state evolution.
+ */
+static void PCEFast_PSG_RunChannel_LFO_Off(
+      PCEFast_PSG *psg, int chc, int32 timestamp)
 {
    struct psg_channel *ch = &psg->channel[chc];
    int32 running_timestamp = ch->lastts;
    int32 run_time = timestamp - ch->lastts;
 
    ch->lastts = timestamp;
-
    if(!run_time)
       return;
 
-   ch->UpdateOutput(psg, running_timestamp, ch);
+   PCEFAST_PSG_CALL_OUTPUT(psg, running_timestamp, ch);
 
    if(chc >= 4)
    {
       int32 freq = ch->noise_freq_cache;
-
       ch->noisecount -= run_time;
 
 #define CLOCK_LFSR(lfsr) { unsigned int newbit = ((lfsr >> 0) ^ (lfsr >> 1) ^ (lfsr >> 11) ^ (lfsr >> 12) ^ (lfsr >> 17)) & 1; lfsr = (lfsr >> 1) | (newbit << 17); }
-      if(PCEFast_PSG_UpdateOutput_Noise == ch->UpdateOutput)
+      if(PCEFAST_PSG_IS_NOISE(ch))
       {
          while(ch->noisecount <= 0)
          {
             CLOCK_LFSR(ch->lfsr);
-            PCEFast_PSG_UpdateOutput_Noise(psg, timestamp + ch->noisecount, ch);
+            PCEFast_PSG_UpdateOutput_Noise(
+               psg, timestamp + ch->noisecount, ch);
             ch->noisecount += freq;
          }
       }
       else
       {
+#ifdef AURORA_PS2_PCE_FAST
+         {
+            const int32 n8 = freq * 8;
+            const int32 n7 = freq * 7;
+            while(ch->noisecount <= -n7)
+            {
+               CLOCK_LFSR(ch->lfsr); CLOCK_LFSR(ch->lfsr);
+               CLOCK_LFSR(ch->lfsr); CLOCK_LFSR(ch->lfsr);
+               CLOCK_LFSR(ch->lfsr); CLOCK_LFSR(ch->lfsr);
+               CLOCK_LFSR(ch->lfsr); CLOCK_LFSR(ch->lfsr);
+               ch->noisecount += n8;
+            }
+         }
+#endif
          while(ch->noisecount <= 0)
          {
             CLOCK_LFSR(ch->lfsr);
@@ -459,64 +613,117 @@ static void PCEFast_PSG_RunChannel(PCEFast_PSG *psg, int chc, int32 timestamp, b
 #undef CLOCK_LFSR
    }
 
-   /* D7 of control is 0, don't clock the counter at all.
-    * D7 of lfocontrol is 1 (and chc == 1), don't clock the counter at all (not sure about this).
-    * In DDA mode, don't clock the counter.
-    * (Noise being enabled isn't handled here since AFAIK it doesn't disable
-    *  clocking of the waveform portion; its sound just overrides the waveform
-    *  output when the noise enable bit is set, which is handled in RecalcUOFunc). */
-   if(!(ch->control & 0x80) || (chc == 1 && (psg->lfoctrl & 0x80)) || (ch->control & 0x40))
+   if(!(ch->control & 0x80) ||
+      (chc == 1 && (psg->lfoctrl & 0x80)) ||
+      (ch->control & 0x40))
       return;
 
    ch->counter -= run_time;
 
-   if(!LFO_On && ch->freq_cache <= 0xA)
+#ifdef AURORA_PS2_PCE_FAST
+   /* Fully attenuated delayed volume latches cannot emit a transition.
+    * If >=4 waveform ticks are due, jump to the exact same final
+    * counter/index/dda state with one divide.
+    */
+   if(ch->vl[0] == 0x1F &&
+      ch->vl[1] == 0x1F &&
+      ch->blip_prev_samp[0] == 0 &&
+      ch->blip_prev_samp[1] == 0 &&
+      !PCEFAST_PSG_IS_NOISE(ch) &&
+      ch->counter <= -(ch->freq_cache * 3))
+   {
+      const int32 inc_count =
+         ((0 - ch->counter) / ch->freq_cache) + 1;
+      ch->counter += inc_count * ch->freq_cache;
+      ch->waveform_index =
+         (ch->waveform_index + inc_count) & 0x1F;
+      ch->dda = ch->waveform[ch->waveform_index];
+      return;
+   }
+#endif
+
+   if(ch->freq_cache <= 0xA)
    {
       if(ch->counter <= 0)
       {
-         const int32 inc_count = ((0 - ch->counter) / ch->freq_cache) + 1;
-
+#ifdef AURORA_PS2_PCE_FAST
+         const int32 inc_count =
+            PCEFast_PSG_DivSmallNonNegative(
+               0 - ch->counter, ch->freq_cache) + 1;
+#else
+         const int32 inc_count =
+            ((0 - ch->counter) / ch->freq_cache) + 1;
+#endif
          ch->counter += inc_count * ch->freq_cache;
-
-         ch->waveform_index = (ch->waveform_index + inc_count) & 0x1F;
+         ch->waveform_index =
+            (ch->waveform_index + inc_count) & 0x1F;
          ch->dda = ch->waveform[ch->waveform_index];
       }
    }
 
    while(ch->counter <= 0)
    {
-      ch->waveform_index = (ch->waveform_index + 1) & 0x1F;
+      ch->waveform_index =
+         (ch->waveform_index + 1) & 0x1F;
       ch->dda = ch->waveform[ch->waveform_index];
-
-      ch->UpdateOutput(psg, timestamp + ch->counter, ch);
-
-      if(LFO_On)
-      {
-         PCEFast_PSG_RunChannel(psg, 1, timestamp + ch->counter, false);
-         PCEFast_PSG_RecalcFreqCache(psg, 0);
-         PCEFast_PSG_RecalcUOFunc(psg, 0);
-
-         ch->counter += (ch->freq_cache <= 0xA) ? 0xA : ch->freq_cache;	/* Not particularly accurate, but faster. */
-      }
-      else
-         ch->counter += ch->freq_cache;
+      PCEFAST_PSG_CALL_OUTPUT(
+         psg, timestamp + ch->counter, ch);
+      ch->counter += ch->freq_cache;
    }
 }
 
-static INLINE void PCEFast_PSG_UpdateSubLFO(PCEFast_PSG *psg, int32 timestamp)
+static void PCEFast_PSG_RunChannel_LFO_On(
+      PCEFast_PSG *psg, int32 timestamp)
 {
-   int chc;
-   PCEFast_PSG_RunChannel(psg, 0, timestamp, true);
+   struct psg_channel *ch = &psg->channel[0];
+   int32 running_timestamp = ch->lastts;
+   int32 run_time = timestamp - ch->lastts;
 
-   for(chc = 1; chc < 6; chc++)
-      PCEFast_PSG_RunChannel(psg, chc, timestamp, false);
+   ch->lastts = timestamp;
+   if(!run_time)
+      return;
+
+   PCEFAST_PSG_CALL_OUTPUT(psg, running_timestamp, ch);
+
+   if(!(ch->control & 0x80) || (ch->control & 0x40))
+      return;
+
+   ch->counter -= run_time;
+
+   while(ch->counter <= 0)
+   {
+      ch->waveform_index =
+         (ch->waveform_index + 1) & 0x1F;
+      ch->dda = ch->waveform[ch->waveform_index];
+
+      PCEFAST_PSG_CALL_OUTPUT(
+         psg, timestamp + ch->counter, ch);
+
+      PCEFast_PSG_RunChannel_LFO_Off(
+         psg, 1, timestamp + ch->counter);
+      PCEFast_PSG_RecalcFreqCache(psg, 0);
+      PCEFast_PSG_RecalcUOFunc(psg, 0);
+
+      ch->counter +=
+         (ch->freq_cache <= 0xA) ? 0xA : ch->freq_cache;
+   }
 }
 
-static INLINE void PCEFast_PSG_UpdateSubNonLFO(PCEFast_PSG *psg, int32 timestamp)
+static INLINE void PCEFast_PSG_UpdateSubLFO(
+      PCEFast_PSG *psg, int32 timestamp)
+{
+   int chc;
+   PCEFast_PSG_RunChannel_LFO_On(psg, timestamp);
+   for(chc = 1; chc < 6; chc++)
+      PCEFast_PSG_RunChannel_LFO_Off(psg, chc, timestamp);
+}
+
+static INLINE void PCEFast_PSG_UpdateSubNonLFO(
+      PCEFast_PSG *psg, int32 timestamp)
 {
    int chc;
    for(chc = 0; chc < 6; chc++)
-      PCEFast_PSG_RunChannel(psg, chc, timestamp, false);
+      PCEFast_PSG_RunChannel_LFO_Off(psg, chc, timestamp);
 }
 
 static void PCEFast_PSG_Update(PCEFast_PSG *psg, int32 timestamp)

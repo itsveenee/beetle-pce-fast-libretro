@@ -32,6 +32,12 @@ struct psg_channel
 
    int32 counter;
 
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_EXPERIMENTAL_V8
+    * Mirrors UpdateOutput's semantic choice for direct hot-loop dispatch.
+    * UpdateOutput itself remains authoritative/maintained for compatibility. */
+   uint8 aurora_update_mode;
+#endif
    PCEFast_PSG_UOFunc UpdateOutput;
 
    uint32 freq_cache;
