@@ -8,3 +8,8 @@
 *.manifest
 /old
 
+
+# Aurora PS2 generated PCE build files
+/beetle_pce_fast_libretro_ps2.a
+/beetle_pce_fast_libretro_ps2.a.symbols.map
+/mednafen_pce_fast_libretro_ps2_raw.a
