@@ -43,6 +43,42 @@ static uint32 disabled_layer_color;
 
 static bool unlimited_sprites;
 
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_V15_MULTICORE_SPRITE_LIMIT_20260824
+ * Renderer-only severity shared with Aurora's SNES limiter. Level 0 is a
+ * strict no-op: PCE keeps its native 16 sprites/scanline and 64 SAT sprites.
+ * Mode 0 scales the SNES 34->N ratios to 16; mode 1 keeps hardware 16/line
+ * and caps distinct SAT sprite numbers across the complete picture. */
+static int aurora_obj_limit_level = 0;
+static int aurora_obj_limit_mode = 0;
+
+void AuroraSetSpriteLimiter(int level, int mode)
+{
+   if(level < 0) level = 0;
+   if(level > 6) level = 6;
+   aurora_obj_limit_level = level;
+   aurora_obj_limit_mode = mode == 1 ? 1 : 0;
+}
+
+static INLINE unsigned AuroraPceLineSpriteBudget(void)
+{
+   static const unsigned snes_budget[7] = { 34, 28, 24, 20, 16, 12, 8 };
+   unsigned n;
+   if(!aurora_obj_limit_level || aurora_obj_limit_mode == 1)
+      return 16;
+   n = (16u * snes_budget[aurora_obj_limit_level] + 17u) / 34u;
+   return n ? n : 1u;
+}
+
+static INLINE unsigned AuroraPceScreenSpriteBudget(void)
+{
+   static const unsigned budget[7] = { 64, 28, 24, 20, 16, 12, 8 };
+   if(!aurora_obj_limit_level || aurora_obj_limit_mode != 1)
+      return 64;
+   return budget[aurora_obj_limit_level];
+}
+#endif
+
 #define ULE_BG0		1
 #define ULE_SPR0	2
 #define ULE_BG1		4
@@ -732,6 +768,9 @@ static INLINE void RebuildSATCache(vdc_t *vdc)
       sat_ptr->no = no;
       sat_ptr->flags = flags;
       sat_ptr->cgmode = cgmode;
+#ifdef AURORA_PS2_PCE_FAST
+      vdc->aurora_spr_source_index[vdc->SAT_Cache_Valid] = (uint8)i;
+#endif
 
       sat_ptr++;
       vdc->SAT_Cache_Valid++;
@@ -745,6 +784,9 @@ static INLINE void RebuildSATCache(vdc_t *vdc)
 
          sat_ptr->no = no;
          sat_ptr->x = x;
+#ifdef AURORA_PS2_PCE_FAST
+         vdc->aurora_spr_source_index[vdc->SAT_Cache_Valid] = (uint8)i;
+#endif
 
          sat_ptr++;
          vdc->SAT_Cache_Valid++;
@@ -797,6 +839,7 @@ typedef struct
    uint32 x;
    uint32 flags;
    uint8 palette_index;
+   uint8 source_index;
    uint16 no;
    uint16 sub_y;
 } SPRLE;
@@ -850,6 +893,8 @@ static NO_INLINE void DrawSprites(vdc_t *vdc, const int32 end, uint16 *spr_lineb
             (uint8)((flags & 0xF) << 4);
          SpriteList[active_sprites].no = no;
          SpriteList[active_sprites].sub_y = (uint16)(y_offset & 15);
+         SpriteList[active_sprites].source_index =
+            vdc->aurora_spr_source_index[sat_index];
 
          CheckFixSpriteTileCache(
             vdc, no, (vdc->MWR & 0xC) | SATR->cgmode);
@@ -894,12 +939,44 @@ static NO_INLINE void DrawSprites(vdc_t *vdc, const int32 end, uint16 *spr_lineb
             SpriteList[active_sprites].palette_index = palette_index;
             SpriteList[active_sprites].no = no;
             SpriteList[active_sprites].sub_y = y_offset & 15;
+#ifdef AURORA_PS2_PCE_FAST
+            SpriteList[active_sprites].source_index =
+               vdc->aurora_spr_source_index[i];
+#endif
 
             CheckFixSpriteTileCache(vdc, no, (vdc->MWR & 0xC) | cgmode);
             active_sprites++;
          }
       }
    }
+
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V15_MULTICORE_SPRITE_LIMIT_20260824: filter only after native overflow detection/list build. */
+   if(aurora_obj_limit_level > 0)
+   {
+      if(aurora_obj_limit_mode == 1)
+      {
+         const unsigned budget = AuroraPceScreenSpriteBudget();
+         int out = 0;
+         for(i = 0; i < active_sprites; ++i)
+         {
+            if((unsigned)SpriteList[i].source_index < budget)
+            {
+               if(out != i)
+                  SpriteList[out] = SpriteList[i];
+               ++out;
+            }
+         }
+         active_sprites = out;
+      }
+      else
+      {
+         const int budget = (int)AuroraPceLineSpriteBudget();
+         if(active_sprites > budget)
+            active_sprites = budget;
+      }
+   }
+#endif
 
    MDFN_FastU32MemsetM8(
       (uint32 *)spr_linebuf, 0, ((end + 3) >> 1) & ~1);

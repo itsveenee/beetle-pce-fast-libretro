@@ -23,6 +23,22 @@
 #include "mednafen/pce_fast/pcecd_drive.h"
 #include "mednafen/hw_misc/arcade_card/arcade_card.h"
 #include "mednafen/mempatcher.h"
+
+/* AURORA_RUNTIME_LEAN_V1_PCE_20260824
+ * Aurora does not expose PCE retro_cheat_reset/retro_cheat_set. Removing
+ * these calls eliminates the periodic cheat pass and cheat RAM bookkeeping
+ * from the supported PS2 path. Non-Aurora builds keep upstream behavior. */
+#ifdef AURORA_PS2_PCE_FAST
+#define MDFNMP_Init(ps, np)                 (true)
+#define MDFNMP_Kill()                       ((void)0)
+#define MDFNMP_AddRAM(sz, addr, ram)        ((void)0)
+#define MDFNMP_InstallReadPatches()         ((void)0)
+#define MDFNMP_RemoveReadPatches()          ((void)0)
+#define MDFN_LoadGameCheats(ptr)            ((void)0)
+#define MDFN_FlushGameCheats(nosave)        ((void)0)
+#define MDFNMP_ApplyPeriodicCheats()        ((void)0)
+#define MDFNI_AddCheat(...)                 (1)
+#endif
 #include "mednafen/cdrom/cdromif.h"
 #include "mednafen/cdrom/CDUtility.h"
 
@@ -2476,11 +2492,21 @@ static void update_input(void)
             input_state |= (joy_bits[j] & (1 << map[i])) ? (1 << i) : 0;
 
             // disable soft reset
+#if defined(AURORA_PS2_PCE_FAST)
+            /* AURORA_RUNTIME_LEAN_V1_PCE_20260824: pce_fast_disable_softreset is fixed disabled. */
+            if (0)
+#else
             if (disable_softreset == true)
+#endif
                if ((input_state & 0xC) == 0xC) input_state &= ~0xC;
 
             // handle turbo buttons
-            if (turbo_enable[j][i] == 1)                    // Check whether a given button is turbo-capable
+#if defined(AURORA_PS2_PCE_FAST)
+            /* AURORA_RUNTIME_LEAN_V1_PCE_20260824: frontend turbo owns cadence; core turbo is unreachable. */
+            if (0)
+#else
+            if (turbo_enable[j][i] == 1)
+#endif
             {
                if (input_state & (1 << i))
                {
@@ -2499,7 +2525,12 @@ static void update_input(void)
                turbo_counter[j][i] = 0;                     // Reset counter if button is not pressed.
 
             // handle 2/6 button mode switching
+#if defined(AURORA_PS2_PCE_FAST)
+            /* AURORA_RUNTIME_LEAN_V1_PCE_20260824: core turbo-toggle hotkeys are not exposed by Aurora. */
+            if (0)
+#else
             if (turbo_map_selected[i] != -1 && Turbo_Toggling && !AVPad6Enabled[j])
+#endif
             {
                if (input_state_cb(j, RETRO_DEVICE_JOYPAD, 0, map[i]))
                {
@@ -2586,9 +2617,14 @@ void retro_run(void)
     *   frame in order to set initial (valid)
     *   width/height values for the video_cb
     *   callback */
+#if defined(AURORA_PS2_PCE_FAST)
+   /* AURORA_RUNTIME_LEAN_V1_PCE_20260824: internal libretro frameskip is permanently disabled. */
+   if (0)
+#else
    if ((frameskip_type > 0) &&
        retro_audio_buff_active &&
        video_frames)
+#endif
    {
       switch (frameskip_type)
       {

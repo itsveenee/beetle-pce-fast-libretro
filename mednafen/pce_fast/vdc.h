@@ -108,6 +108,8 @@ typedef struct
     */
    uint8 aurora_spr_line_count[1024];
    uint8 aurora_spr_line_index[1024][17];
+   /* AURORA_V15_MULTICORE_SPRITE_LIMIT_20260824: original SAT sprite number for each expanded cache unit. */
+   uint8 aurora_spr_source_index[128];
 #endif
 
    uint16 SAT[0x100];
@@ -123,6 +125,9 @@ extern vdc_t *vdc;
 void VDC_SetPixelFormat(const uint8* CustomColorMap, const uint32 CustomColorMapLen);
 void VDC_RunFrame(EmulateSpecStruct *espec, bool IsHES);
 void VDC_SetLayerEnableMask(uint64 mask);
+#ifdef AURORA_PS2_PCE_FAST
+void AuroraSetSpriteLimiter(int level, int mode); /* AURORA_V15_MULTICORE_SPRITE_LIMIT_20260824; archive namespaces to PCE_* */
+#endif
 
 DECLFW(VDC_Write);
 
