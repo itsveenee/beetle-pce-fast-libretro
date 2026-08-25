@@ -103,6 +103,17 @@ vdc_t *vdc = NULL;
 
 static INLINE void MDFN_FastU32MemsetM8(uint32_t *array, uint32_t value_32, unsigned int u32len)
 {
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V17_SAFE_PERF_PCE_SPRCLEAR64_20260824
+    * The only Aurora call uses an MDFN_ALIGN(8) buffer at +64 bytes
+    * and an even uint32 count. Clear two uint32s with one R5900 SD. */
+   uint64 *dst64 = (uint64 *)array;
+   const uint64 value64 = (uint64)value_32 | ((uint64)value_32 << 32);
+   unsigned int n64 = u32len >> 1;
+   unsigned int i;
+   for(i = 0; i < n64; ++i)
+      dst64[i] = value64;
+#else
    uint32_t *ai;
 
    for(ai = array; ai < array + u32len; ai += 2)
@@ -110,6 +121,7 @@ static INLINE void MDFN_FastU32MemsetM8(uint32_t *array, uint32_t value_32, unsi
       ai[0] = value_32;
       ai[1] = value_32;
    }
+#endif
 }
 
 /* Spread the low 8 bits of p across the 8 bytes of a uint64: output byte
@@ -1174,13 +1186,27 @@ void VDC_RunFrame(EmulateSpecStruct *espec, bool IsHES)
    bool skip = espec->skip || IsHES;
 
    if(!skip){
+#ifdef AURORA_PS2_PCE_FAST
+      /* AURORA_V18_SAFE_PERF_PCE_VDC_SETTINGS_20260824
+       * check_variables() already materializes these exact values in globals.
+       * Avoid strcmp-based MDFN_GetSettingUI() dispatch every frame. */
+      DisplayRect->y = setting_initial_scanline;
+      DisplayRect->h = setting_last_scanline - DisplayRect->y + 1;
+#else
       DisplayRect->y = MDFN_GetSettingUI("pce_fast.slstart");
       DisplayRect->h = MDFN_GetSettingUI("pce_fast.slend") - DisplayRect->y + 1;
+#endif
    }
 	
 	//Change 352 mode width without restart
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V18_SAFE_PERF_PCE_VDC_SETTINGS_20260824: same already-parsed hoverscan value, no string lookup. */
+   if (defined_width[1] != setting_pce_hoverscan)
+      defined_width[1] = setting_pce_hoverscan;
+#else
    if (defined_width[1] != MDFN_GetSettingUI("pce_fast.hoverscan"))
       defined_width[1] = MDFN_GetSettingUI("pce_fast.hoverscan");
+#endif
 	
    do
    {

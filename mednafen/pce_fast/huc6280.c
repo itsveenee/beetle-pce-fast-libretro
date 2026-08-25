@@ -668,16 +668,12 @@ void HuC6280_Run(int32 cycles)
    int i;
    int32 next_event;
 #ifdef AURORA_PS2_PCE_FAST
-   /* AURORA_PCE_EXPERIMENTAL_V6
-    * pce_overclocked is configured at load. Cache it for this run.
-    * Aurora currently exposes multiplier 1x. */
-   const int32 aurora_oc = pce_overclocked;
-   const int32 aurora_scaled_cycles =
-      (aurora_oc == 1) ? cycles : (cycles * aurora_oc);
-   const int32 aurora_timer_period =
-      (aurora_oc == 1) ? 1024 : (1024 * aurora_oc);
+   /* AURORA_V18_SAFE_PERF_PCE_HUC_OC1_20260824
+    * Aurora fixes pce_fast_ocmultiplier to 1 at load. HuC6280_Run() is
+    * entered several times per scanline, so do not reload/test a value that
+    * cannot change in this frontend. */
    const int32 next_user_event =
-      HuCPU.previous_next_user_event + aurora_scaled_cycles;
+      HuCPU.previous_next_user_event + cycles;
 #else
    const int32 next_user_event =
       HuCPU.previous_next_user_event + cycles * pce_overclocked;
@@ -780,7 +776,8 @@ void HuC6280_Run(int32 cycles)
          while(HuCPU.timestamp >= HuCPU.timer_next_timestamp)
          {
 #ifdef AURORA_PS2_PCE_FAST
-            HuCPU.timer_next_timestamp += aurora_timer_period;
+            /* AURORA_V18_SAFE_PERF_PCE_HUC_OC1_20260824: fixed 1x timer period. */
+            HuCPU.timer_next_timestamp += 1024;
 #else
             HuCPU.timer_next_timestamp += 1024 * pce_overclocked;
 #endif

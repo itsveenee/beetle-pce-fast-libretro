@@ -740,10 +740,24 @@ static INLINE void ADPCM_PB_Run(int32 basetime, int32 run_time)
           * accum += (pcm - accum) * 1, out = accum = pcm. Otherwise it
           * rolls off highs at the cutoff RedoLPF() picked for the current
           * ADPCM sample frequency. accum is kept in Q16. */
+#ifdef AURORA_PS2_PCE_FAST
+         /* AURORA_V17_SAFE_PERF_PCE_ADPCM_LPF_OFF_20260824
+          * Aurora fixes pce_fast_adpcmlp=disabled, so coeff=65536.
+          * Preserve filter state bit-exactly without the 64-bit multiply. */
+         ADPCM.lpf_accum = pcm << 16;
+#else
          ADPCM.lpf_accum += (int32)((((int64)(pcm << 16) - ADPCM.lpf_accum) * ADPCM.lpf_coeff) >> 16);
          pcm = ADPCM.lpf_accum >> 16;
+#endif
 
+#ifdef AURORA_PS2_PCE_FAST
+         /* AURORA_V17_SAFE_PERF_PCE_CD_CLOCK1_20260824:
+          * OC_Multiplier is fixed to 1 by Aurora. Constant /3 lets GCC
+          * use its normal reciprocal/shift sequence instead of DIV. */
+         synthtime = (basetime + (ADPCM.bigdiv >> 16)) / 3;
+#else
          synthtime = ((basetime + (ADPCM.bigdiv >> 16))) / (3 * OC_Multiplier);
+#endif
 
          if(sbuf[0] && sbuf[1])
          {

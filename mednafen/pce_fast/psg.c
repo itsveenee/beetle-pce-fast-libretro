@@ -113,6 +113,13 @@ static void PCEFast_PSG_UpdateOutput_Norm(PCEFast_PSG *psg, const int32 timestam
    samp[0] = psg->dbtable[ch->vl[0]][sv];
    samp[1] = psg->dbtable[ch->vl[1]][sv];
 
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V17_SAFE_PERF_PCE_PSG_VOLUME100_20260824
+    * Aurora fixes every pce_fast_sound_channel_N_volume to 100.
+    * The generic scaling branch is therefore exactly the unity path. */
+   delta0 = samp[0] - ch->blip_prev_samp[0];
+   delta1 = samp[1] - ch->blip_prev_samp[1];
+#else
    if(ch->user_volume < 100)
    {
        delta0 = ((samp[0] - ch->blip_prev_samp[0]) * ch->user_volume * 164) >> 14;
@@ -121,6 +128,7 @@ static void PCEFast_PSG_UpdateOutput_Norm(PCEFast_PSG *psg, const int32 timestam
        delta0 = samp[0] - ch->blip_prev_samp[0];
        delta1 = samp[1] - ch->blip_prev_samp[1];
    }
+#endif
 
    PCEFast_PSG_BlipStereo(psg, timestamp, delta0, delta1);
 
@@ -138,6 +146,13 @@ static void PCEFast_PSG_UpdateOutput_Noise(PCEFast_PSG *psg, const int32 timesta
    samp[0] = psg->dbtable[ch->vl[0]][sv];
    samp[1] = psg->dbtable[ch->vl[1]][sv];
 
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V17_SAFE_PERF_PCE_PSG_VOLUME100_20260824
+    * Aurora fixes every pce_fast_sound_channel_N_volume to 100.
+    * The generic scaling branch is therefore exactly the unity path. */
+   delta0 = samp[0] - ch->blip_prev_samp[0];
+   delta1 = samp[1] - ch->blip_prev_samp[1];
+#else
    if(ch->user_volume < 100)
    {
        delta0 = ((samp[0] - ch->blip_prev_samp[0]) * ch->user_volume * 164) >> 14;
@@ -146,6 +161,7 @@ static void PCEFast_PSG_UpdateOutput_Noise(PCEFast_PSG *psg, const int32 timesta
        delta0 = samp[0] - ch->blip_prev_samp[0];
        delta1 = samp[1] - ch->blip_prev_samp[1];
    }
+#endif
 
    PCEFast_PSG_BlipStereo(psg, timestamp, delta0, delta1);
 
@@ -169,6 +185,13 @@ static void PCEFast_PSG_UpdateOutput_Off(PCEFast_PSG *psg, const int32 timestamp
 
    samp[0] = samp[1] = 0;
 
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V17_SAFE_PERF_PCE_PSG_VOLUME100_20260824
+    * Aurora fixes every pce_fast_sound_channel_N_volume to 100.
+    * The generic scaling branch is therefore exactly the unity path. */
+   delta0 = samp[0] - ch->blip_prev_samp[0];
+   delta1 = samp[1] - ch->blip_prev_samp[1];
+#else
    if(ch->user_volume < 100)
    {
        delta0 = ((samp[0] - ch->blip_prev_samp[0]) * ch->user_volume * 164) >> 14;
@@ -177,6 +200,7 @@ static void PCEFast_PSG_UpdateOutput_Off(PCEFast_PSG *psg, const int32 timestamp
        delta0 = samp[0] - ch->blip_prev_samp[0];
        delta1 = samp[1] - ch->blip_prev_samp[1];
    }
+#endif
 
    PCEFast_PSG_BlipStereo(psg, timestamp, delta0, delta1);
 
@@ -194,6 +218,13 @@ static void PCEFast_PSG_UpdateOutput_Accum(PCEFast_PSG *psg, const int32 timesta
    samp[0] = ((int32)psg->dbtable_volonly[ch->vl[0]] * ((int32)ch->samp_accum - 496)) >> (8 + 5);
    samp[1] = ((int32)psg->dbtable_volonly[ch->vl[1]] * ((int32)ch->samp_accum - 496)) >> (8 + 5);
 
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V17_SAFE_PERF_PCE_PSG_VOLUME100_20260824
+    * Aurora fixes every pce_fast_sound_channel_N_volume to 100.
+    * The generic scaling branch is therefore exactly the unity path. */
+   delta0 = samp[0] - ch->blip_prev_samp[0];
+   delta1 = samp[1] - ch->blip_prev_samp[1];
+#else
    if(ch->user_volume < 100)
    {
        delta0 = ((samp[0] - ch->blip_prev_samp[0]) * ch->user_volume * 164) >> 14;
@@ -202,6 +233,7 @@ static void PCEFast_PSG_UpdateOutput_Accum(PCEFast_PSG *psg, const int32 timesta
        delta0 = samp[0] - ch->blip_prev_samp[0];
        delta1 = samp[1] - ch->blip_prev_samp[1];
    }
+#endif
 
    PCEFast_PSG_BlipStereo(psg, timestamp, delta0, delta1);
 
@@ -712,18 +744,42 @@ static void PCEFast_PSG_RunChannel_LFO_On(
 static INLINE void PCEFast_PSG_UpdateSubLFO(
       PCEFast_PSG *psg, int32 timestamp)
 {
+#ifndef AURORA_PS2_PCE_FAST
    int chc;
+#endif
    PCEFast_PSG_RunChannel_LFO_On(psg, timestamp);
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V18_SAFE_PERF_PCE_PSG_UNROLL_20260824
+    * Six fixed channels: explicit calls avoid loop bookkeeping in a PSG
+    * timing helper entered far more often than once per video frame. */
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 1, timestamp);
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 2, timestamp);
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 3, timestamp);
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 4, timestamp);
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 5, timestamp);
+#else
    for(chc = 1; chc < 6; chc++)
       PCEFast_PSG_RunChannel_LFO_Off(psg, chc, timestamp);
+#endif
 }
 
 static INLINE void PCEFast_PSG_UpdateSubNonLFO(
       PCEFast_PSG *psg, int32 timestamp)
 {
+#ifndef AURORA_PS2_PCE_FAST
    int chc;
+#endif
+#ifdef AURORA_PS2_PCE_FAST
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 0, timestamp);
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 1, timestamp);
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 2, timestamp);
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 3, timestamp);
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 4, timestamp);
+   PCEFast_PSG_RunChannel_LFO_Off(psg, 5, timestamp);
+#else
    for(chc = 0; chc < 6; chc++)
       PCEFast_PSG_RunChannel_LFO_Off(psg, chc, timestamp);
+#endif
 }
 
 static void PCEFast_PSG_Update(PCEFast_PSG *psg, int32 timestamp)

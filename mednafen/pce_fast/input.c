@@ -155,6 +155,33 @@ void PCEINPUT_SetInput(unsigned port, const char *type, uint8 *ptr)
 
 void INPUT_Frame(void)
 {
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V18_SAFE_PERF_PCE_INPUT_FRAME_20260824
+    * Normal Aurora ports are all gamepads and its 2-button carrier writes
+    * only the low byte. If any high bit/device appears, fall through to the
+    * original path so 6-button mode switching and mouse semantics survive. */
+   if(InputTypes[0] == 1 && InputTypes[1] == 1 &&
+      InputTypes[2] == 1 && InputTypes[3] == 1 &&
+      InputTypes[4] == 1 &&
+      data_ptr[0] && data_ptr[1] && data_ptr[2] &&
+      data_ptr[3] && data_ptr[4])
+   {
+      const uint8 high =
+         data_ptr[0][1] | data_ptr[1][1] | data_ptr[2][1] |
+         data_ptr[3][1] | data_ptr[4][1];
+
+      if(high == 0)
+      {
+         pce_jp_data[0] = data_ptr[0][0];
+         pce_jp_data[1] = data_ptr[1][0];
+         pce_jp_data[2] = data_ptr[2][0];
+         pce_jp_data[3] = data_ptr[3][0];
+         pce_jp_data[4] = data_ptr[4][0];
+         return;
+      }
+   }
+#endif
+   {
    unsigned x;
 
    for(x = 0; x < 5; x++)
@@ -178,11 +205,20 @@ void INPUT_Frame(void)
          pce_mouse_button[x] = *(uint8 *)(data_ptr[x] + 4);
       }
    }
+   }
 }
 
 void INPUT_FixTS(void)
 {
    unsigned x;
+
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V18_SAFE_PERF_PCE_INPUT_FIXTS_20260824: ordinary Aurora PCE ports are joypads. */
+   if(InputTypes[0] != 2 && InputTypes[1] != 2 &&
+      InputTypes[2] != 2 && InputTypes[3] != 2 &&
+      InputTypes[4] != 2)
+      return;
+#endif
 
    for(x = 0; x < 5; x++)
    {
@@ -225,6 +261,25 @@ uint8 INPUT_Read(unsigned int A)
 {
    uint8 ret = 0xF;
    int tmp_ri = read_index;
+
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V18_SAFE_PERF_PCE_INPUT_READ_20260824
+    * This is algebraically the same gamepad branch below while AVPad6 is
+    * disabled; preserve AVPad6Which toggling because it is state-visible. */
+   if((unsigned)tmp_ri < 5U &&
+      InputTypes[tmp_ri] == 1 &&
+      !AVPad6Enabled[tmp_ri])
+   {
+      if(sel & 1)
+         ret ^= (pce_jp_data[tmp_ri] >> 4) & 0x0F;
+      else
+      {
+         ret ^= pce_jp_data[tmp_ri] & 0x0F;
+         AVPad6Which[tmp_ri] = !AVPad6Which[tmp_ri];
+      }
+      goto aurora_v18_input_read_finish;
+   }
+#endif
 
    if(tmp_ri > 4)
       ret ^= 0xF;
@@ -271,6 +326,9 @@ uint8 INPUT_Read(unsigned int A)
       }
    }
 
+#ifdef AURORA_PS2_PCE_FAST
+aurora_v18_input_read_finish:
+#endif
    if(!PCE_IsCD)
       ret |= 0x80; // Set when CDROM is not attached
 

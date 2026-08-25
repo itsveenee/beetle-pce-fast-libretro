@@ -866,9 +866,9 @@ static DECLFW(IOWrite)
           * integer DIV for Aurora's current 1x setting. */
          PCEFast_PSG_Write(
             psg,
-            (pce_overclocked == 1)
-               ? HuCPU.timestamp
-               : (HuCPU.timestamp / pce_overclocked),
+            /* AURORA_V17_SAFE_PERF_PCE_CLOCK1_PSG_20260824:
+             * Aurora fixes pce_fast_ocmultiplier to 1. */
+            HuCPU.timestamp,
             A, V);
 #else
          PCEFast_PSG_Write(psg, HuCPU.timestamp / pce_overclocked, A, V);
@@ -1394,7 +1394,12 @@ static void Emulate(EmulateSpecStruct *espec)
   PCECD_Run(HuCPU.timestamp * 3);
  }
 
+#ifdef AURORA_PS2_PCE_FAST
+ /* AURORA_V17_SAFE_PERF_PCE_CLOCK1_ENDFRAME_20260824 */
+ PCEFast_PSG_EndFrame(psg, HuCPU.timestamp);
+#else
  PCEFast_PSG_EndFrame(psg, HuCPU.timestamp / pce_overclocked);
+#endif
 
  {
   uint8_t y;
@@ -1413,8 +1418,13 @@ static void Emulate(EmulateSpecStruct *espec)
    * back to the original independent readers.
    */
   {
+#ifdef AURORA_PS2_PCE_FAST
+     /* AURORA_V17_SAFE_PERF_PCE_CLOCK1_BLIP_20260824 */
+     const blip_time_t frame_time = HuCPU.timestamp;
+#else
      const blip_time_t frame_time =
         HuCPU.timestamp / pce_overclocked;
+#endif
      long left_avail, right_avail;
 
      Blip_Buffer_end_frame(&sbuf[0], frame_time);
@@ -1822,7 +1832,9 @@ static MDFN_Surface *surf = NULL;
  * removing the surface->frontend copy. Only used when the granted buffer
  * is RGB565 (our native output). The VDC renderer is write-only on the
  * target surface, so an uncached framebuffer is safe. */
+#if !defined(AURORA_PS2_PCE_FAST)
 static bool fb_direct_supported           = true; /* probe once, then latch */
+#endif
 
 static bool failed_init = false;
 
@@ -2443,6 +2455,39 @@ void retro_unload_game(void)
 
 static void update_input(void)
 {
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V18_SAFE_PERF_PCE_LIBRETRO_PAD5_20260824
+    * pceEnvironment advertises bitmasks and the Aurora bridge initializes all
+    * five ports as joypads. Avoid joy_bits[], the second player loop, device
+    * switch and legacy turbo-map machinery in that normal state. */
+   if(input_type[0] == RETRO_DEVICE_JOYPAD &&
+      input_type[1] == RETRO_DEVICE_JOYPAD &&
+      input_type[2] == RETRO_DEVICE_JOYPAD &&
+      input_type[3] == RETRO_DEVICE_JOYPAD &&
+      input_type[4] == RETRO_DEVICE_JOYPAD)
+   {
+      unsigned j;
+      for(j = 0; j < MAX_PLAYERS; ++j)
+      {
+         const uint16_t jb = (uint16_t)input_state_cb(
+            j, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_MASK);
+         const uint16_t st = (uint16_t)(
+            (((jb >> RETRO_DEVICE_ID_JOYPAD_A)      & 1u) << 0) |
+            (((jb >> RETRO_DEVICE_ID_JOYPAD_B)      & 1u) << 1) |
+            (((jb >> RETRO_DEVICE_ID_JOYPAD_SELECT) & 1u) << 2) |
+            (((jb >> RETRO_DEVICE_ID_JOYPAD_START)  & 1u) << 3) |
+            (((jb >> RETRO_DEVICE_ID_JOYPAD_UP)     & 1u) << 4) |
+            (((jb >> RETRO_DEVICE_ID_JOYPAD_RIGHT)  & 1u) << 5) |
+            (((jb >> RETRO_DEVICE_ID_JOYPAD_DOWN)   & 1u) << 6) |
+            (((jb >> RETRO_DEVICE_ID_JOYPAD_LEFT)   & 1u) << 7));
+
+         input_buf[j][0] = (uint8_t)(st & 0xffu);
+         input_buf[j][1] = (uint8_t)(st >> 8);
+      }
+      return;
+   }
+#endif
+   {
    unsigned i,j;
    int16_t joy_bits[MAX_PLAYERS] = {0};
 
@@ -2487,6 +2532,24 @@ static void update_input(void)
          uint16_t input_state = 0;
 
          // read normal inputs
+#if defined(AURORA_PS2_PCE_FAST)
+         /* AURORA_V17_SAFE_PERF_PCE_DIRECT_INPUT_20260824
+          * Aurora exposes the PCE pads as fixed 2-button joypads and
+          * already supplies one libretro bitmask per port. Pack the
+          * native PCE byte directly instead of looping over 15 ids. */
+         {
+            const uint16_t jb = (uint16_t)joy_bits[j];
+            input_state = (uint16_t)(
+               (((jb >> RETRO_DEVICE_ID_JOYPAD_A)      & 1u) << 0) |
+               (((jb >> RETRO_DEVICE_ID_JOYPAD_B)      & 1u) << 1) |
+               (((jb >> RETRO_DEVICE_ID_JOYPAD_SELECT) & 1u) << 2) |
+               (((jb >> RETRO_DEVICE_ID_JOYPAD_START)  & 1u) << 3) |
+               (((jb >> RETRO_DEVICE_ID_JOYPAD_UP)     & 1u) << 4) |
+               (((jb >> RETRO_DEVICE_ID_JOYPAD_RIGHT)  & 1u) << 5) |
+               (((jb >> RETRO_DEVICE_ID_JOYPAD_DOWN)   & 1u) << 6) |
+               (((jb >> RETRO_DEVICE_ID_JOYPAD_LEFT)   & 1u) << 7));
+         }
+#else
          for (i = 0; i < MAX_BUTTONS; i++)
          {
             input_state |= (joy_bits[j] & (1 << map[i])) ? (1 << i) : 0;
@@ -2546,6 +2609,7 @@ static void update_input(void)
                else turbo_toggle_down[j][i] = 0;
             }
          }
+#endif
 
          // Input data must be little endian.
          input_buf[j][0] = (input_state >> 0) & 0xff;
@@ -2586,6 +2650,7 @@ static void update_input(void)
       } break;
       } // case
    }
+   }
 }
 
 void update_geometry(unsigned width, unsigned height)
@@ -2601,12 +2666,19 @@ void update_geometry(unsigned width, unsigned height)
 
 void retro_run(void)
 {
+#if !defined(AURORA_PS2_PCE_FAST)
    static bool last_palette_format;
-   EmulateSpecStruct spec;
    bool resolution_changed = false;
+#endif
+   EmulateSpecStruct spec;
    int skip_frame          = 0;
 
+#if !defined(AURORA_PS2_PCE_FAST)
    input_poll_cb();
+#else
+   /* AURORA_V17_SAFE_PERF_PCE_EMPTY_POLL_20260824:
+    * Aurora's pceInputPoll() callback is intentionally empty. */
+#endif
 
    update_input();
 
@@ -2664,20 +2736,43 @@ void retro_run(void)
    spec.DisplayRect.y           = 0;
    spec.DisplayRect.w           = 0;
    spec.DisplayRect.h           = 0;
+#if defined(AURORA_PS2_PCE_FAST)
+   /* AURORA_V18_SAFE_PERF_PCE_LIBRETRO_FRAME_20260824
+    * Aurora fixes pce_fast_palette=RGB. */
+   spec.CustomPalette           = NULL;
+   spec.CustomPaletteNumEntries = 0;
+#else
    spec.CustomPalette           = use_palette ? composite_palette : NULL;
    spec.CustomPaletteNumEntries = use_palette ? 512 : 0;
+#endif
    spec.InterlaceOn             = false;
    spec.InterlaceField          = false;
    spec.skip                    = skip_frame;
    spec.SoundBuf                = sound_buf;
    spec.SoundBufSize            = 0;
 
+#if !defined(AURORA_PS2_PCE_FAST)
    if (last_palette_format != use_palette)
    {
       spec.VideoFormatChanged = true;
       last_palette_format = use_palette;
    }
+#endif
 
+#if defined(AURORA_PS2_PCE_FAST)
+   /* AURORA_V18_SAFE_PERF_PCE_LIBRETRO_FRAME_20260824_SURFACE
+    * Aurora owns Direct GS in pce_bridge and deliberately rejects the
+    * libretro software-framebuffer query. Render to the persistent core
+    * surface directly; V17 already makes skip_frame permanently zero. */
+   Emulate(&spec);
+
+   video_width  = spec.DisplayRect.w;
+   video_height = spec.DisplayRect.h;
+
+   video_cb(surf->pixels + surf->pitch * spec.DisplayRect.y,
+         video_width, video_height, surf->pitch * 2);
+
+#else
    /* Try to render directly into the frontend's software framebuffer
     * (zero-copy). Saved/restored around Emulate so the fallback surface
     * is untouched if the request is declined or the format isn't RGB565. */
@@ -2729,11 +2824,24 @@ void retro_run(void)
       surf->pitch  = saved_pitch;
    }
 
+#endif
    audio_batch_cb(spec.SoundBuf, spec.SoundBufSize);
 
+#if defined(AURORA_PS2_PCE_FAST)
+   /* AURORA_V18_SAFE_PERF_PCE_LIBRETRO_FRAME_20260824_NOTIFY
+    * GET_VARIABLE_UPDATE is permanently false and pceEnvironment accepts
+    * SET_GEOMETRY without side effects. Dimensions already travel through
+    * video_cb to the Aurora bridge. */
+#else
    {
    bool updated = false;
+#if defined(AURORA_PS2_PCE_FAST)
+   /* AURORA_V17_SAFE_PERF_PCE_FIXED_OPTIONS_20260824:
+    * pceEnvironment(GET_VARIABLE_UPDATE) is permanently false. */
+   if (0)
+#else
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
+#endif
    {
       unsigned c;
       check_variables(false);
@@ -2750,8 +2858,13 @@ void retro_run(void)
       update_geometry(video_width, video_height);
    }
 
+#endif
+#if !defined(AURORA_PS2_PCE_FAST)
    video_frames++;
    audio_frames += spec.SoundBufSize;
+#else
+   /* AURORA_V18_SAFE_PERF_PCE_LIBRETRO_FRAME_20260824_STATS: deinit-only diagnostics omitted from gameplay. */
+#endif
 }
 
 void retro_get_system_info(struct retro_system_info *info)
