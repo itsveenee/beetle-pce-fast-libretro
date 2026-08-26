@@ -2664,6 +2664,15 @@ void update_geometry(unsigned width, unsigned height)
    environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &system_av_info);
 }
 
+#if defined(AURORA_PS2_PCE_FAST)
+/* AURORA_SAFE_FRAMESKIP_GG_ZOOM_V2_2: frontend-owned one-shot only. */
+static int aurora_skip_next_video_frame = 0;
+void PCE_AuroraSetSkipNextVideoFrame(int skip)
+{
+   aurora_skip_next_video_frame = skip ? 1 : 0;
+}
+#endif
+
 void retro_run(void)
 {
 #if !defined(AURORA_PS2_PCE_FAST)
@@ -2720,6 +2729,14 @@ void retro_run(void)
       else
          frameskip_counter++;
    }
+
+#if defined(AURORA_PS2_PCE_FAST)
+   if (aurora_skip_next_video_frame)
+   {
+      skip_frame = 1;
+      aurora_skip_next_video_frame = 0;
+   }
+#endif
 
    /* If frameskip settings have changed, update
     * frontend audio latency */
