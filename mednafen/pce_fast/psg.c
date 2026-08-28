@@ -807,6 +807,20 @@ static void PCEFast_PSG_Update(PCEFast_PSG *psg, int32 timestamp)
       }
    }
 
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V3_SAFE_PCE_PSG_SINGLE_CHUNK_20260828:
+    * with no delayed volume latch, the original loop can execute only once. */
+   if(MDFN_LIKELY(run_time > 0 && psg->vol_update_counter <= 0))
+   {
+      if(lfo_on)
+         PCEFast_PSG_UpdateSubLFO(psg, timestamp);
+      else
+         PCEFast_PSG_UpdateSubNonLFO(psg, timestamp);
+      psg->lastts = timestamp;
+      return;
+   }
+#endif
+
    clocks = run_time;
    running_timestamp = psg->lastts;
 
