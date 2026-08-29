@@ -1322,7 +1322,16 @@ static bool CDAccess_Image_Read_Raw_Sector(CDAccess *cda, uint8_t *buf, int32_t 
          if(ct->SubchannelMode)
             SeekPos += 96 * (lba - ct->LBA);
 
+#ifdef AURORA_PS2_PCE_FAST
+         /* AURORA_CD_AUDIO_STREAM_V1_PCE_SEEK_20260829
+          * Sequential CDDA/data sectors are already at SeekPos after the
+          * previous read.  Avoid an fseek that would throw away stdio's
+          * read-ahead buffer; random/non-contiguous access still seeks. */
+         if (cdstream_tell(ct->fp) != (uint64_t)SeekPos)
+            cdstream_seek(ct->fp, SeekPos, SEEK_SET);
+#else
          cdstream_seek(ct->fp, SeekPos, SEEK_SET);
+#endif
 
          switch(ct->DIFormat)
          {

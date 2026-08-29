@@ -479,6 +479,22 @@ libretro_vfs_implementation_file *retro_vfs_file_open_impl(
          if (stream->fp)
             setvbuf(stream->fp, stream->buf, _IOFBF, 0x4000);
       }
+#elif defined(AURORA_PS2_PCE_FAST)
+      /* AURORA_CD_AUDIO_STREAM_V1_PCE_VFS_20260829
+       * PS2 mass:/ is especially sensitive to sector-sized synchronous I/O.
+       * Keep Beetle's whole-image cache disabled and instead give each normal
+       * file-backed stream a modest stdio read-ahead buffer.  The RFILE owns
+       * stream->buf and frees it in retro_vfs_file_close_impl(). */
+      if (stream->scheme != VFS_SCHEME_CDROM && stream->fp)
+      {
+         const size_t bufsize = 32 * 1024;
+         stream->buf = (char*)malloc(bufsize);
+         if (stream->buf && setvbuf(stream->fp, stream->buf, _IOFBF, bufsize) != 0)
+         {
+            free(stream->buf);
+            stream->buf = NULL;
+         }
+      }
 #endif
    }
    else

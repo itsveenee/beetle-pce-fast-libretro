@@ -58,8 +58,11 @@ typedef struct cdstream
 {
    RFILE   *fp;     /* file-backed: libretro-common RFILE handle */
    uint8_t *buf;    /* memory-backed: owned buffer, freed on close */
-   uint64_t size;   /* memory-backed: buffer size in bytes */
-   int64_t  pos;    /* memory-backed: current read position */
+   uint64_t size;   /* memory-backed, or cached file-backed size */
+   int64_t  pos;    /* memory-backed, or cached file-backed logical position */
+#ifdef AURORA_PS2_PCE_FAST
+   bool     cacheable; /* AURORA_CD_AUDIO_STREAM_V2_PCE_STRUCT_20260829 */
+#endif
 } cdstream;
 
 /* Open `path` as a file-backed read stream.  Returns true on success;
@@ -78,19 +81,32 @@ bool cdstream_open_write(cdstream *out, const char *path);
  * returned. */
 bool cdstream_open_memcached(cdstream *out, const char *path);
 
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_CD_AUDIO_STREAM_V2_PCE_API_20260829 */
+uint64_t cdstream_ps2_read_cached(cdstream *s, void *data, uint64_t count);
+void cdstream_ps2_cache_forget(cdstream *s);
+#endif
+
 /* Read up to `count` bytes into `data`.  Returns the number of
  * bytes actually read; 0 on EOF or error. */
 static INLINE uint64_t cdstream_read(cdstream *s, void *data, uint64_t count)
 {
    if (s->fp)
    {
-      int64_t got = filestream_read(s->fp, data, (int64_t)count);
-      /* filestream_read returns -1 on error.  Don't wrap a negative
-       * up to UINT64_MAX - return 0 so callers comparing against the
-       * requested count behave sanely. */
-      if (got < 0)
-         return 0;
-      return (uint64_t)got;
+#ifdef AURORA_PS2_PCE_FAST
+      /* AURORA_CD_AUDIO_STREAM_V2_PCE_READ_20260829 */
+      if (s->cacheable)
+         return cdstream_ps2_read_cached(s, data, count);
+#endif
+      {
+         int64_t got = filestream_read(s->fp, data, (int64_t)count);
+         /* filestream_read returns -1 on error.  Don't wrap a negative
+          * up to UINT64_MAX - return 0 so callers comparing against the
+          * requested count behave sanely. */
+         if (got < 0)
+            return 0;
+         return (uint64_t)got;
+      }
    }
    if (s->buf)
    {
@@ -126,15 +142,34 @@ static INLINE void cdstream_seek(cdstream *s, int64_t offset, int whence)
 {
    if (s->fp)
    {
-      int seek_position = RETRO_VFS_SEEK_POSITION_START;
-      switch (whence)
+#ifdef AURORA_PS2_PCE_FAST
+      /* AURORA_CD_AUDIO_STREAM_V2_PCE_SEEK_20260829 */
+      if (s->cacheable)
       {
-         case SEEK_SET: seek_position = RETRO_VFS_SEEK_POSITION_START;   break;
-         case SEEK_CUR: seek_position = RETRO_VFS_SEEK_POSITION_CURRENT; break;
-         case SEEK_END: seek_position = RETRO_VFS_SEEK_POSITION_END;     break;
+         int64_t new_position;
+         switch (whence)
+         {
+            case SEEK_SET: new_position = offset;                    break;
+            case SEEK_CUR: new_position = s->pos + offset;           break;
+            case SEEK_END: new_position = (int64_t)s->size + offset; break;
+            default:       return;
+         }
+         if (new_position >= 0)
+            s->pos = new_position;
+         return;
       }
-      filestream_seek(s->fp, offset, seek_position);
-      return;
+#endif
+      {
+         int seek_position = RETRO_VFS_SEEK_POSITION_START;
+         switch (whence)
+         {
+            case SEEK_SET: seek_position = RETRO_VFS_SEEK_POSITION_START;   break;
+            case SEEK_CUR: seek_position = RETRO_VFS_SEEK_POSITION_CURRENT; break;
+            case SEEK_END: seek_position = RETRO_VFS_SEEK_POSITION_END;     break;
+         }
+         filestream_seek(s->fp, offset, seek_position);
+         return;
+      }
    }
    if (s->buf)
    {
@@ -158,10 +193,17 @@ static INLINE uint64_t cdstream_tell(cdstream *s)
 {
    if (s->fp)
    {
-      int64_t pos = filestream_tell(s->fp);
-      if (pos < 0)
-         return (uint64_t)-1;
-      return (uint64_t)pos;
+#ifdef AURORA_PS2_PCE_FAST
+      /* AURORA_CD_AUDIO_STREAM_V2_PCE_TELL_20260829 */
+      if (s->cacheable)
+         return s->pos >= 0 ? (uint64_t)s->pos : (uint64_t)-1;
+#endif
+      {
+         int64_t pos = filestream_tell(s->fp);
+         if (pos < 0)
+            return (uint64_t)-1;
+         return (uint64_t)pos;
+      }
    }
    if (s->buf)
       return (uint64_t)s->pos;
@@ -172,10 +214,17 @@ static INLINE uint64_t cdstream_size(cdstream *s)
 {
    if (s->fp)
    {
-      int64_t sz = filestream_get_size(s->fp);
-      if (sz < 0)
-         return (uint64_t)-1;
-      return (uint64_t)sz;
+#ifdef AURORA_PS2_PCE_FAST
+      /* AURORA_CD_AUDIO_STREAM_V2_PCE_SIZE_20260829 */
+      if (s->cacheable)
+         return s->size;
+#endif
+      {
+         int64_t sz = filestream_get_size(s->fp);
+         if (sz < 0)
+            return (uint64_t)-1;
+         return (uint64_t)sz;
+      }
    }
    if (s->buf)
       return s->size;
@@ -189,6 +238,11 @@ static INLINE void cdstream_close(cdstream *s)
 {
    if (s->fp)
    {
+#ifdef AURORA_PS2_PCE_FAST
+      /* AURORA_CD_AUDIO_STREAM_V2_PCE_CLOSE_20260829 */
+      if (s->cacheable)
+         cdstream_ps2_cache_forget(s);
+#endif
       filestream_close(s->fp);
       s->fp = NULL;
    }
