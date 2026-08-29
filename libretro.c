@@ -1114,6 +1114,14 @@ static int LoadCommon(void)
          HuCPU.FastMap[x] = &BaseRAM[0];
 
 #ifdef AURORA_PS2_PCE_FAST
+      /* AURORA_PCE_HUCARD_RAMMAP_V6_20260829
+       * Base PCE RAM is mirrored across physical banks F8-FB. The legacy
+       * pce_fast loop above remains untouched, but HuCards complete the
+       * fourth mirror for opcode fetch. Data FastRead/FastWrite already
+       * cover FB below. CD is deliberately unchanged by V6. */
+      if(!PCE_IsCD)
+         HuCPU.FastMap[0xFB] = &BaseRAM[0];
+
       /* AURORA_PCE_EXPERIMENTAL_V6
        * BaseRAM callbacks are plain accesses to the same mirrored 8 KiB
        * PCE RAM window. */

@@ -623,6 +623,24 @@ static NO_INLINE void DrawBG(const vdc_t *vdc, const uint32 count, uint8 *target
 #define SPRF_VFLIP      0x08000
 #define SPRF_SPRITE0    0x10000
 
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_HUCARD_SPRITE0_V6_20260829
+ * A 32px physical SAT sprite becomes two 16px cache entries in pce_fast.
+ * Both halves still belong to physical sprite #0 for HuC6270 collision.
+ * Aurora already records the original SAT source index.
+ *
+ * CD deliberately retains V5's cache-index behavior in this V6. */
+static INLINE uint32 AuroraPceSprite0Flag(
+      const vdc_t *which_vdc, unsigned cache_index)
+{
+   if(!PCE_IsCD)
+      return which_vdc->aurora_spr_source_index[cache_index] == 0
+         ? SPRF_SPRITE0 : 0;
+
+   return cache_index == 0 ? SPRF_SPRITE0 : 0;
+}
+#endif
+
 static const unsigned int sprite_height_tab[4] = { 16, 32, 64, 64 };
 static const unsigned int sprite_height_no_mask[4] = { ~0U, ~2U, ~6U, ~6U };
 
@@ -899,7 +917,7 @@ static NO_INLINE void DrawSprites(vdc_t *vdc, const int32 end, uint16 *spr_lineb
          no |= (y_offset & 0x30) >> 3;
 
          SpriteList[active_sprites].flags =
-            flags | (sat_index ? 0 : SPRF_SPRITE0);
+            flags | AuroraPceSprite0Flag(vdc, (unsigned)sat_index);
          SpriteList[active_sprites].x = SATR->x;
          SpriteList[active_sprites].palette_index =
             (uint8)((flags & 0xF) << 4);
@@ -946,7 +964,13 @@ static NO_INLINE void DrawSprites(vdc_t *vdc, const int32 end, uint16 *spr_lineb
 
             no |= (y_offset & 0x30) >> 3;
 
-            SpriteList[active_sprites].flags = flags | (i ? 0 : SPRF_SPRITE0);
+#ifdef AURORA_PS2_PCE_FAST
+            SpriteList[active_sprites].flags =
+               flags | AuroraPceSprite0Flag(vdc, (unsigned)i);
+#else
+            SpriteList[active_sprites].flags =
+               flags | (i ? 0 : SPRF_SPRITE0);
+#endif
             SpriteList[active_sprites].x = x;
             SpriteList[active_sprites].palette_index = palette_index;
             SpriteList[active_sprites].no = no;
