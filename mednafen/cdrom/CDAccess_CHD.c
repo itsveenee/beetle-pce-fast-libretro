@@ -25,6 +25,10 @@
 #include "../mednafen-types.h"
 #include "../mednafen-endian.h"
 #include "../git.h"
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_EXTREME_CD_VIDEO_FIRST_V1_20260830 */
+#include "../cdstream.h"
+#endif
 
 #include "CDAccess.h"
 #include "CDAccess_CHD.h"
@@ -436,9 +440,37 @@ static bool CDAccess_CHD_Read_Raw_Sector(CDAccess *cda, uint8_t *buf, int32_t lb
       switch (ct->DIFormat)
       {
          case DI_FORMAT_AUDIO:
+#ifdef AURORA_PS2_PCE_FAST
+            /* AURORA_EXTREME_CD_VIDEO_FIRST_V1_20260830 */
+            {
+               const chd_header *head = chd_get_header(self->chd);
+               int cad = lba - ct->LBA + ct->fileOffset;
+               int sph = head->hunkbytes / (2352 + 96);
+               int hunknum = cad / sph;
+
+               /* AURORA_CD_MUSIC_REDBOOK_V3_20260830
+                * AURORA_ASYNC_CDDA_VIDEO_ABSOLUTE_V4_20260830
+                * CHD Red Book may use ONLY an already-resident hunk. */
+               if (!PCE_AuroraCdMusicEnabled())
+               {
+                  memset(buf, 0, 2352);
+               }
+               else if (hunknum == self->oldhunk)
+               {
+                  CDAccess_CHD_Read_CHD_Hunk_RAW(self, buf, lba, ct);
+                  if (ct->RawAudioMSBFirst)
+                     Endian_A16_Swap(buf, 588 * 2);
+               }
+               else
+               {
+                  memset(buf, 0, 2352);
+               }
+            }
+#else
             CDAccess_CHD_Read_CHD_Hunk_RAW(self, buf, lba, ct);
             if (ct->RawAudioMSBFirst)
                Endian_A16_Swap(buf, 588 * 2);
+#endif
             break;
          case DI_FORMAT_MODE1:
             CDAccess_CHD_Read_CHD_Hunk_M1(self, buf, lba, ct);

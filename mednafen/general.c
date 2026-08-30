@@ -27,6 +27,15 @@
 
 static bool IsAbsolutePath(const char *path)
 {
+#ifdef AURORA_PS2_PCE_FAST
+   {
+      const char *colon = path ? strchr(path, ':') : NULL;
+      const char *slash = path ? strchr(path, '/') : NULL;
+      if (colon && (!slash || colon < slash))
+         return true;
+   }
+#endif
+
    if (
 #ifdef _WIN32
          path[0] == '\\' ||
@@ -135,3 +144,5 @@ void MDFN_EvalFIP(char *out, size_t out_size, const char *dir_path, const char *
    else
       snprintf(out, out_size, "%s%c%s", dir_path, slash, rel_path);
 }
+
+/* AURORA_V4_12_PRIVATE_FILEXIO_CDDA_PCE_TOC2CUE_20260830 */

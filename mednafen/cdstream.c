@@ -19,6 +19,57 @@
 #include <string.h>
 
 #include "cdstream.h"
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_V4_4_BUILD_FIX_32X_VIDEO_FIRST_20260830
+ * Keep the Beetle build independent of PS2SDK include paths.
+ * Layout matches the EE kernel ABI; prototypes take opaque pointers. */
+typedef struct AuroraPceEeSemaT
+{
+   int count, max_count, init_count, wait_threads;
+   unsigned int attr, option;
+} AuroraPceEeSemaT;
+
+typedef struct AuroraPceEeThreadT
+{
+   int status;
+   void *func;
+   void *stack;
+   int stack_size;
+   void *gp_reg;
+   int initial_priority;
+   int current_priority;
+   unsigned int attr;
+   unsigned int option;
+} AuroraPceEeThreadT;
+
+typedef struct AuroraPceEeThreadStatusT
+{
+   int status;
+   void *func;
+   void *stack;
+   int stack_size;
+   void *gp_reg;
+   int initial_priority;
+   int current_priority;
+   unsigned int attr;
+   unsigned int option;
+   unsigned int waitType;
+   unsigned int waitId;
+   unsigned int wakeupCount;
+} AuroraPceEeThreadStatusT;
+
+extern int CreateSema(void *);
+extern int DeleteSema(int);
+extern int SignalSema(int);
+extern int WaitSema(int);
+extern int CreateThread(void *);
+extern int DeleteThread(int);
+extern int StartThread(int, void *);
+extern int ReferThreadStatus(int, void *);
+extern void *_gp;
+
+#define AURORA_PCE_EE_SYNC() __asm__ __volatile__("sync")
+#endif
 
 #ifdef AURORA_PS2_PCE_FAST
 /* AURORA_CD_AUDIO_STREAM_V2_PCE_CACHE_20260829
@@ -34,8 +85,327 @@ static cdstream *s_AuroraPceStreamCacheOwner;
 static int64_t s_AuroraPceStreamCacheStart;
 static uint64_t s_AuroraPceStreamCacheLength;
 
+/* AURORA_ASYNC_CDDA_VIDEO_ABSOLUTE_V4_20260830 */
+#define AURORA_PCE_ASYNC_BYTES (64 * 1024)
+#define AURORA_PCE_ASYNC_CHUNK (8 * 1024)
+#define AURORA_PCE_ASYNC_PATH 4096
+
+static uint8_t s_AuroraPceAsyncBuffer[AURORA_PCE_ASYNC_BYTES]
+   __attribute__((aligned(64)));
+static uint8_t s_AuroraPceAsyncStack[16 * 1024]
+   __attribute__((aligned(16)));
+
+static int s_AuroraPceAsyncThreadId = -1;
+static int s_AuroraPceAsyncSema = -1;
+static uint32_t s_AuroraPceAsyncSerialCounter;
+
+static volatile uint32_t s_AuroraPceAsyncReqSeq;
+static volatile uint32_t s_AuroraPceAsyncReqSerial;
+static volatile int64_t s_AuroraPceAsyncReqStart;
+static char s_AuroraPceAsyncReqPath[AURORA_PCE_ASYNC_PATH];
+
+static volatile uint32_t s_AuroraPceAsyncBufSerial;
+static volatile int64_t s_AuroraPceAsyncBufStart;
+static volatile uint64_t s_AuroraPceAsyncBufReady;
+
+static void PCE_AuroraCdAsyncThread(void *arg)
+{
+   uint32_t handled_seq = 0;
+   uint32_t active_seq = 0;
+   int64_t active_start = 0;
+   int64_t worker_pos = 0;
+   char active_path[AURORA_PCE_ASYNC_PATH];
+   char open_path[AURORA_PCE_ASYNC_PATH];
+   RFILE *worker_file = NULL;
+
+   (void)arg;
+   active_path[0] = 0;
+   open_path[0] = 0;
+
+   for (;;)
+   {
+      uint32_t seq;
+      uint64_t done;
+      size_t want;
+      int64_t got;
+
+      WaitSema(s_AuroraPceAsyncSema);
+      seq = s_AuroraPceAsyncReqSeq;
+
+      if (seq != handled_seq)
+      {
+         handled_seq = seq;
+         active_seq = seq;
+         active_start = s_AuroraPceAsyncReqStart;
+         strncpy(active_path, s_AuroraPceAsyncReqPath,
+                 sizeof(active_path) - 1);
+         active_path[sizeof(active_path) - 1] = 0;
+
+         if (!active_path[0])
+         {
+            if (worker_file)
+               filestream_close(worker_file);
+            worker_file = NULL;
+            open_path[0] = 0;
+            continue;
+         }
+
+         if (!worker_file || strcmp(open_path, active_path))
+         {
+            if (worker_file)
+               filestream_close(worker_file);
+            worker_file = filestream_open(
+               active_path, RETRO_VFS_FILE_ACCESS_READ,
+               RETRO_VFS_FILE_ACCESS_HINT_NONE);
+            open_path[0] = 0;
+            if (worker_file)
+            {
+               /* Separate RFILE/VFS handle; no stdio buffering state shared. */
+               strncpy(open_path, active_path, sizeof(open_path) - 1);
+               open_path[sizeof(open_path) - 1] = 0;
+            }
+         }
+
+         if (!worker_file ||
+             filestream_seek(worker_file, active_start,
+                            RETRO_VFS_SEEK_POSITION_START) < 0)
+         {
+            if (worker_file)
+            {
+               filestream_close(worker_file);
+               worker_file = NULL;
+               open_path[0] = 0;
+            }
+            continue;
+         }
+         worker_pos = active_start;
+      }
+
+      if (!worker_file || active_seq != s_AuroraPceAsyncReqSeq)
+         continue;
+
+      done = s_AuroraPceAsyncBufReady;
+      if (done >= AURORA_PCE_ASYNC_BYTES)
+         continue;
+
+      if (worker_pos != active_start + (int64_t)done)
+      {
+         if (filestream_seek(
+                   worker_file, active_start + (int64_t)done,
+                   RETRO_VFS_SEEK_POSITION_START) < 0)
+            continue;
+         worker_pos = active_start + (int64_t)done;
+      }
+
+      want = (size_t)(AURORA_PCE_ASYNC_BYTES - done);
+      if (want > AURORA_PCE_ASYNC_CHUNK)
+         want = AURORA_PCE_ASYNC_CHUNK;
+
+      got = filestream_read(
+         worker_file, s_AuroraPceAsyncBuffer + (size_t)done,
+         (int64_t)want);
+
+      if (active_seq != s_AuroraPceAsyncReqSeq)
+         continue;
+
+      if (got > 0)
+      {
+         worker_pos += (int64_t)got;
+         AURORA_PCE_EE_SYNC();
+         s_AuroraPceAsyncBufReady = done + (uint64_t)got;
+      }
+   }
+}
+
+static int PCE_AuroraCdAsyncEnsureThread(void)
+{
+   AuroraPceEeSemaT sema;
+   AuroraPceEeThreadT thread;
+   AuroraPceEeThreadStatusT current;
+   int priority = 40;
+
+   if (s_AuroraPceAsyncThreadId >= 0 && s_AuroraPceAsyncSema >= 0)
+      return 1;
+
+   memset(&sema, 0, sizeof(sema));
+   sema.init_count = 0;
+   sema.max_count = 1;
+   s_AuroraPceAsyncSema = CreateSema(&sema);
+   if (s_AuroraPceAsyncSema < 0)
+      return 0;
+
+   memset(&current, 0, sizeof(current));
+   if (ReferThreadStatus(0, &current) >= 0)
+   {
+      priority = current.current_priority;
+      if (priority > 1)
+         --priority;
+   }
+
+   memset(&thread, 0, sizeof(thread));
+   thread.func = (void *)PCE_AuroraCdAsyncThread;
+   thread.stack = s_AuroraPceAsyncStack;
+   thread.stack_size = sizeof(s_AuroraPceAsyncStack);
+   thread.gp_reg = &_gp;
+   thread.initial_priority = priority;
+
+   s_AuroraPceAsyncThreadId = CreateThread(&thread);
+   if (s_AuroraPceAsyncThreadId < 0)
+   {
+      DeleteSema(s_AuroraPceAsyncSema);
+      s_AuroraPceAsyncSema = -1;
+      return 0;
+   }
+
+   if (StartThread(s_AuroraPceAsyncThreadId, NULL) < 0)
+   {
+      DeleteThread(s_AuroraPceAsyncThreadId);
+      DeleteSema(s_AuroraPceAsyncSema);
+      s_AuroraPceAsyncThreadId = -1;
+      s_AuroraPceAsyncSema = -1;
+      return 0;
+   }
+
+   return 1;
+}
+
+static void PCE_AuroraCdAsyncSignal(void)
+{
+   if (s_AuroraPceAsyncSema >= 0)
+      (void)SignalSema(s_AuroraPceAsyncSema);
+}
+
+static void PCE_AuroraCdAsyncReset(cdstream *s, int64_t start)
+{
+   if (!s || !s->ps2_async_serial || !s->ps2_async_path ||
+       !*s->ps2_async_path || !PCE_AuroraCdAsyncEnsureThread())
+      return;
+
+   s_AuroraPceAsyncReqSerial = s->ps2_async_serial;
+   s_AuroraPceAsyncReqStart = start;
+   strncpy(s_AuroraPceAsyncReqPath, s->ps2_async_path,
+           sizeof(s_AuroraPceAsyncReqPath) - 1);
+   s_AuroraPceAsyncReqPath[sizeof(s_AuroraPceAsyncReqPath) - 1] = 0;
+
+   s_AuroraPceAsyncBufSerial = s->ps2_async_serial;
+   s_AuroraPceAsyncBufStart = start;
+   s_AuroraPceAsyncBufReady = 0;
+   AURORA_PCE_EE_SYNC();
+   ++s_AuroraPceAsyncReqSeq;
+   PCE_AuroraCdAsyncSignal();
+}
+
+static void PCE_AuroraCdAsyncKick(cdstream *s, int64_t pos)
+{
+   if (!s || !s->ps2_async_serial || !s->ps2_async_path)
+      return;
+
+   if (s_AuroraPceAsyncBufSerial != s->ps2_async_serial ||
+       pos < s_AuroraPceAsyncBufStart ||
+       pos >= s_AuroraPceAsyncBufStart + AURORA_PCE_ASYNC_BYTES)
+   {
+      PCE_AuroraCdAsyncReset(s, pos);
+      return;
+   }
+
+   if (s_AuroraPceAsyncBufReady < AURORA_PCE_ASYNC_BYTES)
+      PCE_AuroraCdAsyncSignal();
+}
+
+void PCE_AuroraCdAsyncForget(uint32_t serial)
+{
+   if (!serial)
+      return;
+
+   if (s_AuroraPceAsyncBufSerial == serial ||
+       s_AuroraPceAsyncReqSerial == serial)
+   {
+      s_AuroraPceAsyncBufSerial = 0;
+      s_AuroraPceAsyncBufReady = 0;
+      s_AuroraPceAsyncReqSerial = 0;
+      s_AuroraPceAsyncReqPath[0] = 0;
+      AURORA_PCE_EE_SYNC();
+      ++s_AuroraPceAsyncReqSeq;
+      PCE_AuroraCdAsyncSignal();
+   }
+}
+
+static void PCE_AuroraCdAsyncCancelAll(void)
+{
+   s_AuroraPceAsyncBufSerial = 0;
+   s_AuroraPceAsyncBufReady = 0;
+   s_AuroraPceAsyncReqSerial = 0;
+   s_AuroraPceAsyncReqPath[0] = 0;
+   AURORA_PCE_EE_SYNC();
+   ++s_AuroraPceAsyncReqSeq;
+   PCE_AuroraCdAsyncSignal();
+}
+
+/* AURORA_EXTREME_CD_VIDEO_FIRST_V1_20260830 */
+static int s_AuroraPceCdAudioSafeWindow;
+static int s_AuroraPceCdAudioRefillRequested;
+/* AURORA_EXTREME_CD_VIDEO_FIRST_V2_20260830 */
+static cdstream *s_AuroraPceCdAudioPendingStream;
+/* AURORA_CD_MUSIC_REDBOOK_V3_20260830 */
+static int s_AuroraPceCdMusicEnabled = 1;
+
+void PCE_AuroraSetCdAudioSafeWindow(int allowed)
+{
+   s_AuroraPceCdAudioSafeWindow = allowed ? 1 : 0;
+}
+
+int PCE_AuroraConsumeCdAudioRefillRequest(void)
+{
+   int requested = s_AuroraPceCdAudioRefillRequested;
+   s_AuroraPceCdAudioRefillRequested = 0;
+   return requested;
+}
+
+int PCE_AuroraCdAudioSafeWindow(void)
+{
+   return s_AuroraPceCdAudioSafeWindow;
+}
+
+void PCE_AuroraRequestCdAudioRefill(cdstream *s)
+{
+   s_AuroraPceCdAudioRefillRequested = 1;
+   /* NULL is intentional for CHD: clear any stale raw-stream prefetch. */
+   s_AuroraPceCdAudioPendingStream = s;
+}
+
+/* AURORA_EXTREME_CD_VIDEO_FIRST_V2_20260830
+ * Prefill raw CDDA cache without advancing logical s->pos. */
+/* AURORA_CD_MUSIC_REDBOOK_V3_20260830 */
+void PCE_AuroraSetCdMusicEnabled(int enabled)
+{
+   s_AuroraPceCdMusicEnabled = enabled ? 1 : 0;
+   if (!s_AuroraPceCdMusicEnabled)
+   {
+      s_AuroraPceCdAudioSafeWindow = 0;
+      s_AuroraPceCdAudioRefillRequested = 0;
+      s_AuroraPceCdAudioPendingStream = NULL;
+      /* AURORA_ASYNC_CDDA_VIDEO_ABSOLUTE_V4_20260830 */
+      PCE_AuroraCdAsyncCancelAll();
+   }
+}
+
+int PCE_AuroraCdMusicEnabled(void)
+{
+   return s_AuroraPceCdMusicEnabled;
+}
+
+int PCE_AuroraPrefetchCdAudio(void)
+{
+   /* AURORA_ASYNC_CDDA_VIDEO_ABSOLUTE_V4_20260830 */
+   return 0;
+}
+
 void cdstream_ps2_cache_forget(cdstream *s)
 {
+   /* AURORA_EXTREME_CD_VIDEO_FIRST_V2_20260830 */
+   if (s_AuroraPceCdAudioPendingStream == s)
+      s_AuroraPceCdAudioPendingStream = NULL;
+
    if (s_AuroraPceStreamCacheOwner == s)
    {
       s_AuroraPceStreamCacheOwner = NULL;
@@ -110,6 +480,85 @@ uint64_t cdstream_ps2_read_cached(cdstream *s, void *data, uint64_t count)
 
    return total;
 }
+
+/* AURORA_EXTREME_CD_VIDEO_FIRST_V1_20260830 */
+uint64_t cdstream_ps2_read_audio_failsoft(cdstream *s, void *data,
+                                          uint64_t count)
+{
+   uint8_t *out = (uint8_t *)data;
+   uint64_t total = 0;
+
+   if (!s || !data || count == 0)
+      return 0;
+
+   if (!s_AuroraPceCdMusicEnabled)
+   {
+      uint64_t drop = count;
+      if (s->size > 0 && s->pos >= 0 &&
+          s->size - (uint64_t)s->pos < drop)
+         drop = s->size - (uint64_t)s->pos;
+      memset(data, 0, (size_t)drop);
+      if (s->pos >= 0)
+         s->pos += (int64_t)drop;
+      return drop;
+   }
+
+   if (s->buf)
+      return cdstream_read(s, data, count);
+
+   while (count > 0)
+   {
+      uint64_t available = 0;
+      uint64_t take = 0;
+
+      if (s->pos < 0)
+         break;
+      if (s->size > 0 && (uint64_t)s->pos >= s->size)
+         break;
+
+      if (s_AuroraPceAsyncBufSerial == s->ps2_async_serial &&
+          s->pos >= s_AuroraPceAsyncBufStart &&
+          s->pos < s_AuroraPceAsyncBufStart +
+                   (int64_t)s_AuroraPceAsyncBufReady)
+      {
+         available = s_AuroraPceAsyncBufReady -
+            (uint64_t)(s->pos - s_AuroraPceAsyncBufStart);
+         take = available < count ? available : count;
+      }
+
+      if (take > 0)
+      {
+         memcpy(out,
+                s_AuroraPceAsyncBuffer +
+                   (size_t)(s->pos - s_AuroraPceAsyncBufStart),
+                (size_t)take);
+         out += take;
+         count -= take;
+         total += take;
+         s->pos += (int64_t)take;
+         PCE_AuroraCdAsyncKick(s, s->pos);
+         continue;
+      }
+
+      {
+         uint64_t drop = count;
+         if (s->size > 0 && s->size - (uint64_t)s->pos < drop)
+            drop = s->size - (uint64_t)s->pos;
+         if (drop == 0)
+            break;
+
+         PCE_AuroraCdAsyncKick(s, s->pos);
+         memset(out, 0, (size_t)drop);
+         out += drop;
+         count -= drop;
+         total += drop;
+         s->pos += (int64_t)drop;
+      }
+   }
+
+   return total;
+}
+
 #endif
 
 bool cdstream_open(cdstream *out, const char *path)
@@ -126,6 +575,18 @@ bool cdstream_open(cdstream *out, const char *path)
       out->size = size > 0 ? (uint64_t)size : 0;
       out->pos = 0;
       out->cacheable = true;
+      /* AURORA_ASYNC_CDDA_VIDEO_ABSOLUTE_V4_20260830 */
+      out->ps2_async_serial = ++s_AuroraPceAsyncSerialCounter;
+      if (out->ps2_async_serial == 0)
+         out->ps2_async_serial = ++s_AuroraPceAsyncSerialCounter;
+      if (path)
+      {
+         size_t plen = strlen(path);
+         out->ps2_async_path = (char *)malloc(plen + 1);
+         if (out->ps2_async_path)
+            memcpy(out->ps2_async_path, path, plen + 1);
+      }
+      /* Worker starts lazily only if Red Book audio actually misses RAM. */
    }
 #endif
    return out->fp != NULL;
@@ -261,3 +722,5 @@ cdstream *cdstream_new_memcached(const char *path)
    }
    return s;
 }
+
+/* AURORA_V4_4_BUILD_FIX_32X_VIDEO_FIRST_20260830 */

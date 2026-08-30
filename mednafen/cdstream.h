@@ -62,6 +62,9 @@ typedef struct cdstream
    int64_t  pos;    /* memory-backed, or cached file-backed logical position */
 #ifdef AURORA_PS2_PCE_FAST
    bool     cacheable; /* AURORA_CD_AUDIO_STREAM_V2_PCE_STRUCT_20260829 */
+   /* AURORA_ASYNC_CDDA_VIDEO_ABSOLUTE_V4_20260830 */
+   uint32_t ps2_async_serial;
+   char    *ps2_async_path;
 #endif
 } cdstream;
 
@@ -85,6 +88,21 @@ bool cdstream_open_memcached(cdstream *out, const char *path);
 /* AURORA_CD_AUDIO_STREAM_V2_PCE_API_20260829 */
 uint64_t cdstream_ps2_read_cached(cdstream *s, void *data, uint64_t count);
 void cdstream_ps2_cache_forget(cdstream *s);
+
+/* AURORA_EXTREME_CD_VIDEO_FIRST_V1_20260830 */
+uint64_t cdstream_ps2_read_audio_failsoft(cdstream *s, void *data,
+                                          uint64_t count);
+void PCE_AuroraSetCdAudioSafeWindow(int allowed);
+int PCE_AuroraConsumeCdAudioRefillRequest(void);
+int PCE_AuroraCdAudioSafeWindow(void);
+/* AURORA_EXTREME_CD_VIDEO_FIRST_V2_20260830 */
+void PCE_AuroraRequestCdAudioRefill(cdstream *s);
+int PCE_AuroraPrefetchCdAudio(void);
+/* AURORA_CD_MUSIC_REDBOOK_V3_20260830 */
+void PCE_AuroraSetCdMusicEnabled(int enabled);
+int PCE_AuroraCdMusicEnabled(void);
+/* AURORA_ASYNC_CDDA_VIDEO_ABSOLUTE_V4_20260830 */
+void PCE_AuroraCdAsyncForget(uint32_t serial);
 #endif
 
 /* Read up to `count` bytes into `data`.  Returns the number of
@@ -242,6 +260,9 @@ static INLINE void cdstream_close(cdstream *s)
       /* AURORA_CD_AUDIO_STREAM_V2_PCE_CLOSE_20260829 */
       if (s->cacheable)
          cdstream_ps2_cache_forget(s);
+      /* AURORA_ASYNC_CDDA_VIDEO_ABSOLUTE_V4_20260830 */
+      if (s->ps2_async_serial)
+         PCE_AuroraCdAsyncForget(s->ps2_async_serial);
 #endif
       filestream_close(s->fp);
       s->fp = NULL;
@@ -251,6 +272,14 @@ static INLINE void cdstream_close(cdstream *s)
       free(s->buf);
       s->buf  = NULL;
    }
+#ifdef AURORA_PS2_PCE_FAST
+   if (s->ps2_async_path)
+   {
+      free(s->ps2_async_path);
+      s->ps2_async_path = NULL;
+   }
+   s->ps2_async_serial = 0;
+#endif
    s->size = 0;
    s->pos  = 0;
 }

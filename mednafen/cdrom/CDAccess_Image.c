@@ -90,6 +90,13 @@ typedef struct CDRFILE_TRACK_INFO
    unsigned int SubchannelMode;
    uint32_t LastSamplePos;
    AudioReader *AReader;
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V4_11_CD_REALTIME_PACING_PCE_TOC_OFFSETS_20260830
+    * cdrdao read-cd single-image normalization metadata. */
+   int32_t TocLeadingGeneratedSectors;
+   bool TocAbsoluteByteOffset;
+   bool TocLengthSpecified;
+#endif
 } CDRFILE_TRACK_INFO;
 
 /* ---- SubQ replacement map (replaces std::map<uint32_t, stl_array<u8,12>>)
@@ -381,7 +388,12 @@ static bool CDAccess_Image_ParseTOCFileLineInfo(CDAccess_Image *self,
       sector_mult += 96;
 
    if(binoffset && sscanf(binoffset, "%ld", &tmp_long) == 1)
+   {
       offset += tmp_long;
+#ifdef AURORA_PS2_PCE_FAST
+      track->TocAbsoluteByteOffset = true;
+#endif
+   }
 
    if(msfoffset && sscanf(msfoffset, "%d:%d:%d", &m, &s, &f) == 3)
       offset += ((m * 60 + s) * 75 + f) * sector_mult;
@@ -391,6 +403,9 @@ static bool CDAccess_Image_ParseTOCFileLineInfo(CDAccess_Image *self,
 
    if(length)
    {
+#ifdef AURORA_PS2_PCE_FAST
+      track->TocLengthSpecified = true;
+#endif
       tmp_long = sectors;
 
       if(sscanf(length, "%d:%d:%d", &m, &s, &f) == 3)
@@ -561,6 +576,81 @@ static bool CDAccess_Image_ImageOpen(CDAccess_Image *self, const char *path, boo
       IsTOC = true;
    }
 
+   /* AURORA_PCE_CDRDAO_TOC_SUPPORT_V4_8_20260830
+    *
+    * Some dumps carry cdrdao TOC syntax in a file named ".cue".
+    * Detect only strong TOC-only tokens, then rewind so the normal parser
+    * below remains the single source of truth.
+    */
+   if(!IsTOC)
+   {
+      int probe_lines = 0;
+
+      cdstream_seek(&fp, 0, SEEK_SET);
+      while(probe_lines++ < 48 &&
+            cdstream_get_line(&fp, linebuf, sizeof(linebuf)) >= 0)
+      {
+         char *p = linebuf;
+         char token[64];
+         char *comment;
+
+         if(probe_lines == 1 &&
+            (uint8_t)p[0] == 0xEF &&
+            (uint8_t)p[1] == 0xBB &&
+            (uint8_t)p[2] == 0xBF)
+            p += 3;
+
+         while(*p == ' ' || *p == '\t' ||
+               *p == '\r' || *p == '\n')
+            p++;
+
+         comment = strstr(p, "//");
+         if(comment)
+            *comment = '\0';
+
+         if(!*p)
+            continue;
+
+         if((!strncasecmp(p, "CD_ROM", 6) &&
+             (p[6] == '\0' || p[6] == ' ' || p[6] == '\t' ||
+              p[6] == '\r' || p[6] == '\n')) ||
+            (!strncasecmp(p, "CD_DA", 5) &&
+             (p[5] == '\0' || p[5] == ' ' || p[5] == '\t' ||
+              p[5] == '\r' || p[5] == '\n')) ||
+            (!strncasecmp(p, "CD_ROM_XA", 9) &&
+             (p[9] == '\0' || p[9] == ' ' || p[9] == '\t' ||
+              p[9] == '\r' || p[9] == '\n')) ||
+            (!strncasecmp(p, "DATAFILE", 8) &&
+             (p[8] == ' ' || p[8] == '\t')) ||
+            (!strncasecmp(p, "AUDIOFILE", 9) &&
+             (p[9] == ' ' || p[9] == '\t')) ||
+            (!strncasecmp(p, "ZERO", 4) &&
+             (p[4] == ' ' || p[4] == '\t')))
+         {
+            IsTOC = true;
+            break;
+         }
+
+         if(!strncasecmp(p, "TRACK", 5) &&
+            (p[5] == ' ' || p[5] == '\t'))
+         {
+            token[0] = '\0';
+            if(sscanf(p + 5, "%63s", token) == 1 &&
+               (token[0] < '0' || token[0] > '9'))
+            {
+               IsTOC = true;
+               break;
+            }
+         }
+      }
+
+      cdstream_seek(&fp, 0, SEEK_SET);
+
+      if(IsTOC)
+         log_cb(RETRO_LOG_INFO,
+                "cdrdao TOC syntax detected independent of extension.\n");
+   }
+
    /* Check for annoying UTF-8 BOM. */
    if(!IsTOC)
    {
@@ -718,6 +808,54 @@ static bool CDAccess_Image_ImageOpen(CDAccess_Image *self, const char *path, boo
             log_cb(RETRO_LOG_ERROR, "Unsupported directive: %s", cmdbuf);
             cdstream_close(&fp);
             return false;
+         }
+         /* AURORA_V4_11_CD_REALTIME_PACING_PCE_TOC_OFFSETS_20260830
+          *
+          * cdrdao can emit legacy:
+          *   ZERO MODE1_RAW mm:ss:ff
+          *   ZERO AUDIO     mm:ss:ff
+          * as well as ZERO/SILENCE mm:ss:ff.
+          *
+          * Before DATAFILE: generated INDEX-00 pregap.
+          * After DATAFILE : generated postgap.
+          */
+         else if(!strcmp(cmdbuf, "ZERO") || !strcmp(cmdbuf, "SILENCE"))
+         {
+            const char *msf = NULL;
+            unsigned int m, sec, f;
+            int32_t gap;
+
+            if(active_track < 0)
+            {
+               log_cb(RETRO_LOG_ERROR,
+                      "Command %s is outside of a TRACK definition!\n",
+                      cmdbuf);
+               cdstream_close(&fp);
+               return false;
+            }
+
+            if(args[1][0])
+               msf = args[1];
+            else if(args[0][0])
+               msf = args[0];
+
+            if(!msf || !StringToMSF(msf, &m, &sec, &f))
+            {
+               cdstream_close(&fp);
+               return false;
+            }
+
+            gap = (int32_t)((m * 60 + sec) * 75 + f);
+
+            if(!TmpTrack.fp && !TmpTrack.AReader)
+            {
+               TmpTrack.pregap = gap;
+#ifdef AURORA_PS2_PCE_FAST
+               TmpTrack.TocLeadingGeneratedSectors += gap;
+#endif
+            }
+            else
+               TmpTrack.postgap += gap;
          }
          else if(!strcmp(cmdbuf, "PREGAP"))
          {
@@ -983,6 +1121,10 @@ static bool CDAccess_Image_ImageOpen(CDAccess_Image *self, const char *path, boo
    }
 
    self->NumTracks = 1 + self->LastTrack - self->FirstTrack;
+
+#ifdef AURORA_PS2_PCE_FAST
+   /* V4_12: V4_11 inferred #offset subtraction retired. */
+#endif
 
    RunningLBA = 0;
    FileOffset = 0;
@@ -1297,6 +1439,12 @@ static bool CDAccess_Image_Read_Raw_Sector(CDAccess *cda, uint8_t *buf, int32_t 
    {
       if(ct->AReader)
       {
+#ifdef AURORA_PS2_PCE_FAST
+         /* AURORA_EXTREME_CD_VIDEO_FIRST_V1_20260830
+          * Opaque compressed-audio reader: guaranteed video wins. */
+         memset(buf, 0, 2352);
+         ct->LastSamplePos += 588;
+#else
          int16_t AudioBuf[588 * 2];
          int i;
          uint64_t frames_read = AR_Read(ct->AReader, (ct->FileOffset / 4) + (lba - ct->LBA) * 588, AudioBuf, 588);
@@ -1311,6 +1459,7 @@ static bool CDAccess_Image_Read_Raw_Sector(CDAccess *cda, uint8_t *buf, int32_t 
 
          for(i = 0; i < 588 * 2; i++)
             MDFN_en16lsb(buf + i * 2, AudioBuf[i]);
+#endif
       }
       else
       {
@@ -1336,7 +1485,12 @@ static bool CDAccess_Image_Read_Raw_Sector(CDAccess *cda, uint8_t *buf, int32_t 
          switch(ct->DIFormat)
          {
             case DI_FORMAT_AUDIO:
+#ifdef AURORA_PS2_PCE_FAST
+               /* AURORA_EXTREME_CD_VIDEO_FIRST_V1_20260830 */
+               cdstream_ps2_read_audio_failsoft(ct->fp, buf, 2352);
+#else
                cdstream_read(ct->fp, buf, 2352);
+#endif
                if(ct->RawAudioMSBFirst)
                   Endian_A16_Swap(buf, 588 * 2);
                break;
@@ -1423,3 +1577,11 @@ CDAccess *CDAccess_Image_New(const char *path, bool image_memcache)
 
    return &self->base;
 }
+
+/* AURORA_PCE_CDRDAO_TOC_SUPPORT_V4_8_20260830 */
+
+/* AURORA_V4_9_SEGACD_CDDA_CHASE_REVIVE_20260830 */
+
+/* AURORA_V4_11_CD_REALTIME_PACING_PCE_TOC_OFFSETS_20260830 */
+
+/* AURORA_V4_12_PRIVATE_FILEXIO_CDDA_PCE_TOC2CUE_20260830 */
