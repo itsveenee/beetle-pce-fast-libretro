@@ -543,6 +543,10 @@ static bool CDAccess_Image_ImageOpen(CDAccess_Image *self, const char *path, boo
    char cmdbuf[256];
    char args[4][256];
    bool IsTOC = false;
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_V4_15_PCE_CDRDAO_AUDIO_ENDIAN_20260830 */
+   bool AuroraCueRawAudioMSBFirst = false;
+#endif
    int32_t active_track = -1;
    int32_t AutoTrackInc = 1; /* For TOC */
    CDRFILE_TRACK_INFO TmpTrack;
@@ -1019,6 +1023,12 @@ static bool CDAccess_Image_ImageOpen(CDAccess_Image *self, const char *path, boo
                cdstream_close(&fp);
                return false;
             }
+
+#ifdef AURORA_PS2_PCE_FAST
+            if(TmpTrack.DIFormat == DI_FORMAT_AUDIO &&
+               AuroraCueRawAudioMSBFirst)
+               TmpTrack.RawAudioMSBFirst = true;
+#endif
          }
          else if(!strcmp(cmdbuf, "INDEX"))
          {
@@ -1071,6 +1081,16 @@ static bool CDAccess_Image_ImageOpen(CDAccess_Image *self, const char *path, boo
          }
          else if(!strcmp(cmdbuf, "REM"))
          {
+#ifdef AURORA_PS2_PCE_FAST
+            if(argcount >= 1 &&
+               !strcasecmp(args[0],
+                  "AURORA_CDRDAO_RAW_AUDIO_MSB_FIRST"))
+            {
+               AuroraCueRawAudioMSBFirst = true;
+               log_cb(RETRO_LOG_INFO,
+                      "Aurora cdrdao CUE: raw AUDIO is MSB-first.\n");
+            }
+#endif
          }
          else if(!strcmp(cmdbuf, "FLAGS"))
          {
@@ -1585,3 +1605,5 @@ CDAccess *CDAccess_Image_New(const char *path, bool image_memcache)
 /* AURORA_V4_11_CD_REALTIME_PACING_PCE_TOC_OFFSETS_20260830 */
 
 /* AURORA_V4_12_PRIVATE_FILEXIO_CDDA_PCE_TOC2CUE_20260830 */
+
+/* AURORA_V4_15_PCE_CDRDAO_AUDIO_ENDIAN_20260830 */
