@@ -103,6 +103,9 @@ void PCE_AuroraSetCdMusicEnabled(int enabled);
 int PCE_AuroraCdMusicEnabled(void);
 /* AURORA_ASYNC_CDDA_VIDEO_ABSOLUTE_V4_20260830 */
 void PCE_AuroraCdAsyncForget(uint32_t serial);
+/* AURORA_PCE_CD_MENU_IO_QUIESCE_V1_20260901 */
+int PCE_AuroraCdAsyncQuiesce(unsigned int timeout_ms);
+void PCE_AuroraCdAsyncResume(void);
 #endif
 
 /* Read up to `count` bytes into `data`.  Returns the number of

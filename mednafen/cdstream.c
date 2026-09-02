@@ -66,6 +66,8 @@ extern int CreateThread(void *);
 extern int DeleteThread(int);
 extern int StartThread(int, void *);
 extern int ReferThreadStatus(int, void *);
+/* AURORA_PCE_CD_MENU_IO_QUIESCE_V1_20260901 */
+extern int DelayThread(unsigned int);
 extern void *_gp;
 
 #define AURORA_PCE_EE_SYNC() __asm__ __volatile__("sync")
@@ -108,6 +110,13 @@ static volatile uint32_t s_AuroraPceAsyncBufSerial;
 static volatile int64_t s_AuroraPceAsyncBufStart;
 static volatile uint64_t s_AuroraPceAsyncBufReady;
 
+/* AURORA_PCE_CD_MENU_IO_QUIESCE_V1_20260901
+ * Request != 0 gates new async work; Ack is written by the worker only
+ * after an in-flight read has returned and its private RFILE is closed. */
+static volatile uint32_t s_AuroraPceAsyncPauseRequest;
+static volatile uint32_t s_AuroraPceAsyncPauseAck;
+static uint32_t s_AuroraPceAsyncPauseCounter;
+
 static void PCE_AuroraCdAsyncThread(void *arg)
 {
    uint32_t handled_seq = 0;
@@ -130,6 +139,26 @@ static void PCE_AuroraCdAsyncThread(void *arg)
       int64_t got;
 
       WaitSema(s_AuroraPceAsyncSema);
+
+      /* AURORA_PCE_CD_MENU_IO_QUIESCE_V1_20260901 */
+      if (s_AuroraPceAsyncPauseRequest != 0)
+      {
+         uint32_t pause_token = s_AuroraPceAsyncPauseRequest;
+
+         if (worker_file)
+            filestream_close(worker_file);
+         worker_file = NULL;
+         open_path[0] = 0;
+         active_path[0] = 0;
+         active_seq = 0;
+         worker_pos = 0;
+
+         AURORA_PCE_EE_SYNC();
+         s_AuroraPceAsyncPauseAck = pause_token;
+         AURORA_PCE_EE_SYNC();
+         continue;
+      }
+
       seq = s_AuroraPceAsyncReqSeq;
 
       if (seq != handled_seq)
@@ -277,7 +306,8 @@ static void PCE_AuroraCdAsyncSignal(void)
 
 static void PCE_AuroraCdAsyncReset(cdstream *s, int64_t start)
 {
-   if (!s || !s->ps2_async_serial || !s->ps2_async_path ||
+   if (s_AuroraPceAsyncPauseRequest ||
+       !s || !s->ps2_async_serial || !s->ps2_async_path ||
        !*s->ps2_async_path || !PCE_AuroraCdAsyncEnsureThread())
       return;
 
@@ -297,7 +327,8 @@ static void PCE_AuroraCdAsyncReset(cdstream *s, int64_t start)
 
 static void PCE_AuroraCdAsyncKick(cdstream *s, int64_t pos)
 {
-   if (!s || !s->ps2_async_serial || !s->ps2_async_path)
+   if (s_AuroraPceAsyncPauseRequest ||
+       !s || !s->ps2_async_serial || !s->ps2_async_path)
       return;
 
    if (s_AuroraPceAsyncBufSerial != s->ps2_async_serial ||
@@ -339,6 +370,54 @@ static void PCE_AuroraCdAsyncCancelAll(void)
    AURORA_PCE_EE_SYNC();
    ++s_AuroraPceAsyncReqSeq;
    PCE_AuroraCdAsyncSignal();
+}
+
+/* AURORA_PCE_CD_MENU_IO_QUIESCE_V1_20260901
+ * Stop async CDDA filesystem traffic and wait for worker acknowledgement.
+ * Logical cdstream positions are not rewound. */
+int PCE_AuroraCdAsyncQuiesce(unsigned int timeout_ms)
+{
+   uint32_t token;
+   unsigned int waited = 0;
+
+   if (s_AuroraPceAsyncThreadId < 0 || s_AuroraPceAsyncSema < 0)
+      return 1;
+
+   token = ++s_AuroraPceAsyncPauseCounter;
+   if (token == 0)
+      token = ++s_AuroraPceAsyncPauseCounter;
+
+   s_AuroraPceAsyncBufSerial = 0;
+   s_AuroraPceAsyncBufReady = 0;
+   s_AuroraPceAsyncReqSerial = 0;
+   s_AuroraPceAsyncReqPath[0] = 0;
+   s_AuroraPceAsyncPauseAck = 0;
+   s_AuroraPceAsyncPauseRequest = token;
+   AURORA_PCE_EE_SYNC();
+
+   ++s_AuroraPceAsyncReqSeq;
+   PCE_AuroraCdAsyncSignal();
+
+   for (;;)
+   {
+      AURORA_PCE_EE_SYNC();
+      if (s_AuroraPceAsyncPauseAck == token)
+         return 1;
+      if (waited >= timeout_ms)
+         break;
+      DelayThread(1000);
+      ++waited;
+   }
+
+   AURORA_PCE_EE_SYNC();
+   return s_AuroraPceAsyncPauseAck == token ? 1 : 0;
+}
+
+void PCE_AuroraCdAsyncResume(void)
+{
+   s_AuroraPceAsyncPauseRequest = 0;
+   s_AuroraPceAsyncPauseAck = 0;
+   AURORA_PCE_EE_SYNC();
 }
 
 /* AURORA_EXTREME_CD_VIDEO_FIRST_V1_20260830 */
