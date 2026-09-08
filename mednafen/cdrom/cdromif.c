@@ -64,6 +64,10 @@ void CDIF_HintReadSector(CDIF *cdif, int32_t lba)
 
 bool CDIF_ReadRawSector(CDIF *cdif, uint8_t *buf, int32_t lba)
 {
+   /* AURORA_V4_4_CUMULATIVE_20260908
+    * Never allow provenance from a previous/direct backend read to leak. */
+   cdif->disc_cdaccess->last_raw_sector_synthesized = false;
+
    if(cdif->UnrecoverableError)
    {
       memset(buf, 0, 2352 + 96);
@@ -79,6 +83,13 @@ bool CDIF_ReadRawSector(CDIF *cdif, uint8_t *buf, int32_t lba)
    cdif->disc_cdaccess->Read_Raw_Sector(cdif->disc_cdaccess, buf, lba);
 
    return true;
+}
+
+/* AURORA_V4_4_CUMULATIVE_20260908 */
+bool CDIF_LastRawSectorSynthesized(CDIF *cdif)
+{
+   return cdif && cdif->disc_cdaccess &&
+          cdif->disc_cdaccess->last_raw_sector_synthesized;
 }
 
 bool CDIF_ReadRawSectorPWOnly(CDIF *cdif, uint8_t *pwbuf, int32_t lba, bool hint_fullread)

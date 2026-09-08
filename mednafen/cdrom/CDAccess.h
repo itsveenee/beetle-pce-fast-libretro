@@ -31,6 +31,11 @@ struct CDAccess
    bool (*Fast_Read_Raw_PW_TSRE)(struct CDAccess *self, uint8_t *pwbuf, int32_t lba);
    bool (*Read_TOC)             (struct CDAccess *self, TOC *toc);
    void (*destroy)              (struct CDAccess *self);
+
+   /* AURORA_V4_4_CUMULATIVE_20260908
+    * Provenance of the most recent Read_Raw_Sector(). It is reset before
+    * every dispatch and set only when Image just encoded MODE1/2048 itself. */
+   bool last_raw_sector_synthesized;
 };
 
 typedef struct CDAccess CDAccess;

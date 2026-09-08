@@ -46,6 +46,9 @@ void CDIF_HintReadSector(CDIF *cdif, int32_t lba);
 
 bool CDIF_ReadRawSector(CDIF *cdif, uint8_t *buf, int32_t lba);
 
+/* AURORA_V4_4_CUMULATIVE_20260908 */
+bool CDIF_LastRawSectorSynthesized(CDIF *cdif);
+
 bool CDIF_ReadRawSectorPWOnly(CDIF *cdif, uint8_t *pwbuf, int32_t lba, bool hint_fullread);
 
 int CDIF_ReadSector(CDIF *cdif, uint8_t *buf, int32_t lba, uint32_t sector_count);

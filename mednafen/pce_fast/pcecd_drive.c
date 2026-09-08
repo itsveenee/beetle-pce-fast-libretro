@@ -431,6 +431,24 @@ static bool ValidateRawDataSector(uint8 *data, const uint32 lba)
  return(true);
 }
 
+/* AURORA_V4_4_CUMULATIVE_20260908
+ * System Card 2/3 data loading repeatedly reaches this path. On PS2, a
+ * MODE1/2048 sector that CDAccess_Image has JUST encoded already has fresh
+ * EDC/L-EC; checking/correcting it again is redundant EE work.
+ *
+ * All raw 2352/CCD/CHD/MODE2/special sectors retain the original validator. */
+static INLINE bool ValidateRawDataSectorForDrive(
+      CDIF *cdif, uint8 *data, const uint32 lba)
+{
+   /* AURORA_V6_RUNTIME_EFFECT_ALL5_20260908
+    * Provenance is set only by CDAccess_Image's freshly encoded MODE1/2048
+    * path, so this is safe on every Aurora target and no build macro is
+    * required. All other sector sources still execute the validator below. */
+   if(CDIF_LastRawSectorSynthesized(cdif))
+      return true;
+   return ValidateRawDataSector(data, lba);
+}
+
 static void DoREADBase(uint32 sa, uint32 sc)
 {
  if(sa > toc.tracks[100].lba) // Another one of those off-by-one PC-FX CD bugs.
@@ -964,7 +982,8 @@ static INLINE void RunCDRead(uint32 system_timestamp, int32 run_time)
 
                CommandCCError(SENSEKEY_ILLEGAL_REQUEST, 0, 0);
             }
-            else if(ValidateRawDataSector(tmp_read_buf, SectorAddr))
+            else if(ValidateRawDataSectorForDrive(
+                       Cur_CDIF, tmp_read_buf, SectorAddr))
             {
                memcpy(cd.SubPWBuf, tmp_read_buf + 2352, 96);
 

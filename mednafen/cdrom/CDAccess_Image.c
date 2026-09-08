@@ -1397,6 +1397,11 @@ static bool CDAccess_Image_Read_Raw_Sector(CDAccess *cda, uint8_t *buf, int32_t 
    CDAccess_Image *self = (CDAccess_Image *)cda;
    uint8_t SimuQ[0xC];
    int32_t track;
+
+   /* AURORA_V4_4_CUMULATIVE_20260908
+    * Raw/special is the safe default. Only the real MODE1/2048 track path
+    * below opts into the redundant-validation fast path. */
+   cda->last_raw_sector_synthesized = false;
    CDRFILE_TRACK_INFO *ct;
 
    if(lba >= self->total_sectors)
@@ -1517,6 +1522,9 @@ static bool CDAccess_Image_Read_Raw_Sector(CDAccess *cda, uint8_t *buf, int32_t 
             case DI_FORMAT_MODE1:
                cdstream_read(ct->fp, buf + 12 + 3 + 1, 2048);
                encode_mode1_sector(lba + 150, buf);
+               /* AURORA_V4_4_CUMULATIVE_20260908
+                * encode_mode1_sector() has just generated EDC/L-EC. */
+               cda->last_raw_sector_synthesized = true;
                break;
             case DI_FORMAT_MODE1_RAW:
             case DI_FORMAT_MODE2_RAW:
