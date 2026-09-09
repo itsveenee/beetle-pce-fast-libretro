@@ -79,7 +79,9 @@ extern void *_gp;
  * One cache for the active read stream, not one cache per CUE track.
  * This keeps memory bounded while turning sequential 2352-byte CD reads into
  * large mass:/ transfers. */
-#define AURORA_PCE_STREAM_CACHE_BYTES (128 * 1024)
+#define AURORA_PCE_STREAM_CACHE_BYTES (256 * 1024) /* AURORA_PCE_SAFE_PERF_R4_20260909
+ * 256 KiB keeps the same single-active-stream design while halving the
+ * refill frequency for long sequential streams versus the previous 128 KiB. */
 
 static uint8_t s_AuroraPceStreamCache[AURORA_PCE_STREAM_CACHE_BYTES]
    __attribute__((aligned(64)));

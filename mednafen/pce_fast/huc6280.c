@@ -103,12 +103,28 @@ struct HuC6280 HuCPU;
    * current PC, so both assignments are no-ops. Page crossings and MPR
    * remaps still produce a different FastPageR base and take the slow
    * path exactly as before. */
+  /* AURORA_PCE_SAFE_PERF_R7_20260909
+   * R4 already avoided FastPageR[] on ordinary instruction boundaries.
+   * R7 narrows the invalidation source: SET_MPR only bumps the scalar
+   * generation when it touches the logical page currently supplying opcodes.
+   *
+   * Page changes still force this slow path unconditionally.  The first
+   * instruction of every HuC6280_Run() is still forced through it by the
+   * existing ~0 page sentinel.  Page 8 remains supported for the core's
+   * $ffff->$10000 PC-overflow safety mapping. */
   #define FixPC_PC() do { \
      unsigned int aurora_real_pc = GetRealPC(); \
-     uintptr_t aurora_new_base = HuCPU.FastPageR[aurora_real_pc >> 13]; \
-     if(HU_PC_base != aurora_new_base) { \
-        HU_PC = aurora_new_base + aurora_real_pc; \
-        HU_PC_base = aurora_new_base; \
+     unsigned int aurora_real_page = aurora_real_pc >> 13; \
+     if(aurora_pc_page != aurora_real_page || \
+        aurora_mpr_seen != s_AuroraPceMprGeneration) { \
+        uintptr_t aurora_new_base = HuCPU.FastPageR[aurora_real_page]; \
+        if(HU_PC_base != aurora_new_base) { \
+           HU_PC = aurora_new_base + aurora_real_pc; \
+           HU_PC_base = aurora_new_base; \
+        } \
+        aurora_pc_page = aurora_real_page; \
+        aurora_mpr_seen = s_AuroraPceMprGeneration; \
+        s_AuroraPceActivePcPage = aurora_real_page; \
      } \
   } while(0)
  #else
@@ -130,6 +146,23 @@ struct HuC6280 HuCPU;
 #define ADDCYC(x) { HuCPU.timestamp += x; }
 
 #ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_SAFE_PERF_R7_20260909
+ * R4 used one global generation incremented by every SET_MPR, so even a TAM
+ * that only remapped data pages (plus its mandatory page-8 mirror refresh)
+ * forced an opcode-map table lookup after the instruction.
+ *
+ * Keep the same scalar generation on the instruction hot path, but bump it
+ * only when SET_MPR refreshes the page currently supplying opcodes.  The
+ * active-page value is advisory only: each HuC6280_Run() already forces its
+ * first FixPC validation, so stale state between Run() calls cannot affect
+ * correctness. */
+static uint32 s_AuroraPceMprGeneration;
+static unsigned int s_AuroraPceActivePcPage = ~0U;
+#define AURORA_PCE_NOTE_MPR_CHANGE(wmpr) do { \
+   if((unsigned int)(wmpr) == s_AuroraPceActivePcPage) \
+      ++s_AuroraPceMprGeneration; \
+} while(0)
+
 /* AURORA_PCE_EXPERIMENTAL_V6
  * Resolve certified physical-bank pointers only when an MPR changes. */
 #define AURORA_PCE_CACHE_MPR(wmpr, wbank) do { \
@@ -138,6 +171,7 @@ struct HuC6280 HuCPU;
 } while(0)
 #else
 #define AURORA_PCE_CACHE_MPR(wmpr, wbank) do { } while(0)
+#define AURORA_PCE_NOTE_MPR_CHANGE(wmpr) do { } while(0)
 #endif
 
 #define SET_MPR(arg_i, arg_v)				\
@@ -147,6 +181,7 @@ struct HuC6280 HuCPU;
  {							\
   HU_Page1 = HuCPU.FastMap[wbank];    \
  }							\
+ AURORA_PCE_NOTE_MPR_CHANGE(wmpr);\
  HuCPU.MPR[wmpr] = wbank;					\
  HuCPU.FastPageR[wmpr] = (uintptr_t)HuCPU.FastMap[wbank] - wmpr * 8192;        \
  AURORA_PCE_CACHE_MPR(wmpr, wbank);					\
@@ -668,6 +703,12 @@ void HuC6280_Run(int32 cycles)
    int i;
    int32 next_event;
 #ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_SAFE_PERF_R4_20260909
+    * Cache only the logical PC page + MPR generation.  ~0 forces the first
+    * instruction boundary through the original FastPageR validation. */
+   unsigned int aurora_pc_page = ~0U;
+   uint32 aurora_mpr_seen = s_AuroraPceMprGeneration - 1U;
+
    /* AURORA_V18_SAFE_PERF_PCE_HUC_OC1_20260824
     * Aurora fixes pce_fast_ocmultiplier to 1 at load. HuC6280_Run() is
     * entered several times per scanline, so do not reload/test a value that

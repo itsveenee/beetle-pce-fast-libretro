@@ -39,6 +39,15 @@ static unsigned int OC_Multiplier;
 
 static void (*IRQCB)(bool asserted);
 
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_SAFE_PERF_R5_20260909
+ * Cache only the externally visible PCE-CD IRQ line level.  The Aurora
+ * callback is idempotent (HuC6280 IRQ begin/end on the same bit), so repeated
+ * notifications with the same level are pure overhead.  -1 forces the first
+ * computed level through after init/load invalidation. */
+static int s_AuroraPceCdIrqAssertedCache = -1;
+#endif
+
 static float CDDAVolumeSetting; // User setting!
 
 static bool	bBRAMEnabled;
@@ -163,7 +172,19 @@ static INLINE void Fader_SyncWhich(void)
 
 static INLINE int32 ADPCM_ClocksToNextEvent(void)
 {
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_SAFE_PERF_R6_20260909
+    * A stopped ADPCM decoder has no playback edge to schedule.  Playback
+    * start explicitly reloads ADPCM.bigdiv, so ticking that divider while
+    * ADPCM.Playing == false cannot affect the next audible sample.
+    *
+    * ReadPending/WritePending remain real timed events and are therefore
+    * still returned exactly as before. */
+   int32 ret = ADPCM.Playing ?
+      ((ADPCM.bigdiv + 65535) >> 16) : 0x7fffffff;
+#else
    int32 ret = (ADPCM.bigdiv + 65535) >> 16;
+#endif
 
    if(ADPCM.WritePending && ret > ADPCM.WritePending)
       ret = ADPCM.WritePending;
@@ -194,11 +215,47 @@ static int32 CalcNextEvent(int32 base)
    return(next_event);
 }
 
+#ifdef AURORA_PS2_PCE_FAST
+/* AURORA_PCE_SAFE_PERF_R7_20260909
+ * Used only when the entire synchronous PCECD_Run() entered with ADPCM
+ * fully idle.  It is the exact CalcNextEvent() minimum with the provably
+ * inactive ADPCM event source removed. */
+static INLINE int32 AuroraCalcNextEventNoADPCM(int32 base)
+{
+   int32 next_event = base;
+
+   if(ClearACKDelay > 0 && next_event > ClearACKDelay)
+      next_event = ClearACKDelay;
+
+   if(next_event > pcecd_drive_ne)
+      next_event = pcecd_drive_ne;
+
+   if(Fader.Clocked && next_event > Fader.CycleCounter)
+      next_event = Fader.CycleCounter;
+
+   return(next_event);
+}
+#endif
+
 static void update_irq_state(void)
 {
-        uint8           irq = _Port[2] & _Port[0x3] & (0x4|0x8|0x10|0x20|0x40);
+   uint8 irq = _Port[2] & _Port[0x3] & (0x4|0x8|0x10|0x20|0x40);
 
-	IRQCB((bool)irq);
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_SAFE_PERF_R5_20260909
+    * Preserve every asserted/deasserted transition, suppress only duplicate
+    * callbacks at the same line level. */
+   {
+      const int asserted = irq ? 1 : 0;
+      if(MDFN_UNLIKELY(s_AuroraPceCdIrqAssertedCache != asserted))
+      {
+         s_AuroraPceCdIrqAssertedCache = asserted;
+         IRQCB((bool)asserted);
+      }
+   }
+#else
+   IRQCB((bool)irq);
+#endif
 }
 
 static void StuffSubchannel(uint8 meow, int subindex)
@@ -240,12 +297,31 @@ static void CDIRQ(int type)
 
 static void UpdateADPCMIRQState(void)
 {
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_SAFE_PERF_R5_20260909
+    * ADPCM_Run() calls this for every CD event chunk.  Most chunks do not
+    * cross half/end thresholds, so leave both _Port[3] and the HuC IRQ line
+    * untouched unless the two ADPCM status bits actually changed. */
+   {
+      const uint8 old_bits = _Port[0x3] & 0x0C;
+      const uint8 new_bits =
+         (ADPCM.HalfReached ? 0x04 : 0x00) |
+         (ADPCM.EndReached  ? 0x08 : 0x00);
+
+      if(MDFN_LIKELY(old_bits == new_bits))
+         return;
+
+      _Port[0x3] = (_Port[0x3] & ~0x0C) | new_bits;
+      update_irq_state();
+   }
+#else
    _Port[0x3] &= ~0xC;
 
-   _Port[0x3] |= ADPCM.HalfReached ? 0x4 : 0x0;	
+   _Port[0x3] |= ADPCM.HalfReached ? 0x4 : 0x0;
    _Port[0x3] |= ADPCM.EndReached ? 0x8 : 0x0;
 
    update_irq_state();
+#endif
 }
 
 static INLINE uint8 read_1808(int32 timestamp)
@@ -287,6 +363,10 @@ bool PCECD_Init(const PCECD_Settings *settings, void (*irqcb)(bool), double mast
    OC_Multiplier = ocm;
 
    IRQCB = irqcb;
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_SAFE_PERF_R5_20260909: first computed line must propagate. */
+   s_AuroraPceCdIrqAssertedCache = -1;
+#endif
 
    sbuf[0] = soundbuf_l;
    sbuf[1] = soundbuf_r;
@@ -327,6 +407,11 @@ void PCECD_Power(uint32 timestamp)
    if((int32)timestamp != lastts)
       (void)PCECD_Run(timestamp);
 
+#ifdef AURORA_PS2_PCE_FAST
+   /* Power explicitly deasserts the external line; keep the cache coherent
+    * so the zeroed ADPCM status immediately below need not call it twice. */
+   s_AuroraPceCdIrqAssertedCache = 0;
+#endif
    IRQCB(0);
 
    PCECD_Drive_Power(timestamp);
@@ -695,6 +780,16 @@ void PCECD_Write(uint32 timestamp, uint32 physAddr, uint8 data)
 
 static INLINE void ADPCM_PB_Run(int32 basetime, int32 run_time)
 {
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_SAFE_PERF_R6_20260909
+    * When playback is stopped, ADPCM.bigdiv is unobservable and is reloaded
+    * on the next 0->1 playback transition.  CalcNextEvent() no longer wakes
+    * on this idle divider, so avoid both the subtraction and what could
+    * otherwise become a long catch-up loop after a larger CD event chunk. */
+   if(MDFN_LIKELY(!ADPCM.Playing))
+      return;
+#endif
+
    ADPCM.bigdiv -= run_time * 65536;
 
    while(ADPCM.bigdiv <= 0)
@@ -836,9 +931,34 @@ void PCECD_Run(uint32 in_timestamp)
    int32 clocks = in_timestamp - lastts;
    int32 running_ts = lastts;
 
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCE_SAFE_PERF_R7_20260909
+    * If true at entry, ADPCM_Run() is an exact no-op under R5/R6:
+    * playback stopped, no timed CPU read/write pending, CD->ADPCM DMA off,
+    * and the ADPCM IRQ status bits already match the decoded state.
+    *
+    * PCECD_Run() is synchronous. Internal drive callbacks only change
+    * CD/subchannel IRQ bits, and ClearACK can only clear a DMA bit, so
+    * ADPCM cannot become active until the CPU regains control. */
+   const uint8 aurora_adpcm_status_bits =
+      (ADPCM.HalfReached ? 0x04 : 0x00) |
+      (ADPCM.EndReached  ? 0x08 : 0x00);
+   const bool aurora_adpcm_idle =
+      !ADPCM.Playing &&
+      !ADPCM.WritePending &&
+      !ADPCM.ReadPending &&
+      !(_Port[0x0B] & 0x03) &&
+      ((_Port[0x03] & 0x0C) == aurora_adpcm_status_bits);
+#endif
+
    while(clocks > 0)
    {
+#ifdef AURORA_PS2_PCE_FAST
+      int32 chunk_clocks = aurora_adpcm_idle ?
+         AuroraCalcNextEventNoADPCM(clocks) : CalcNextEvent(clocks);
+#else
       int32 chunk_clocks = CalcNextEvent(clocks);
+#endif
 
       running_ts += chunk_clocks;
 
@@ -859,7 +979,12 @@ void PCECD_Run(uint32 in_timestamp)
 
       Fader_Run(chunk_clocks);
 
+#ifdef AURORA_PS2_PCE_FAST
+      if(!aurora_adpcm_idle)
+         ADPCM_Run(chunk_clocks, running_ts);
+#else
       ADPCM_Run(chunk_clocks, running_ts);
+#endif
       pcecd_drive_ne = PCECD_Drive_Run(running_ts);
 
       clocks -= chunk_clocks;
@@ -954,6 +1079,11 @@ int PCECD_StateAction(StateMem *sm, int load, int data_only)
 
    if(load)
    {
+#ifdef AURORA_PS2_PCE_FAST
+      /* The cache is an optimization, not emulated state.  Do not serialize
+       * it; force the next computed IRQ level through after a state load. */
+      s_AuroraPceCdIrqAssertedCache = -1;
+#endif
       Fader_SyncWhich();
       //PCECD_Drive_SetDB(_Port[1]);
       PCECD_Drive_SetACK(ACKStatus);
