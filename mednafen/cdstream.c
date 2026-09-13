@@ -113,10 +113,13 @@ static volatile int64_t s_AuroraPceAsyncBufStart;
 static volatile uint64_t s_AuroraPceAsyncBufReady;
 
 /* AURORA_PCE_CD_MENU_IO_QUIESCE_V1_20260901
- * Request != 0 gates new async work; Ack is written by the worker only
- * after an in-flight read has returned and its private RFILE is closed. */
+ * Request != 0 gates new async work.  Aurora now distinguishes a menu pause
+ * from teardown: menu pause waits for the current read and preserves the
+ * private RFILE/cache; hard quiesce closes it before content destruction.
+ * AURORA_PS2_THREE_BUG_FIX_V1_20260912_PCE_SOFT_PAUSE_CORE_STATE */
 static volatile uint32_t s_AuroraPceAsyncPauseRequest;
 static volatile uint32_t s_AuroraPceAsyncPauseAck;
+static volatile int s_AuroraPceAsyncPauseCloseFile;
 static uint32_t s_AuroraPceAsyncPauseCounter;
 
 static void PCE_AuroraCdAsyncThread(void *arg)
@@ -142,18 +145,25 @@ static void PCE_AuroraCdAsyncThread(void *arg)
 
       WaitSema(s_AuroraPceAsyncSema);
 
-      /* AURORA_PCE_CD_MENU_IO_QUIESCE_V1_20260901 */
+      /* AURORA_PS2_THREE_BUG_FIX_V1_20260912_PCE_SOFT_PAUSE_CORE_WORKER
+       * A menu pause is deliberately not a teardown.  Once any already
+       * executing 8 KiB read returns, acknowledge without closing/reopening
+       * the VFS handle and without discarding the ready window.  Hard
+       * quiesce retains the old close/reset behaviour. */
       if (s_AuroraPceAsyncPauseRequest != 0)
       {
          uint32_t pause_token = s_AuroraPceAsyncPauseRequest;
 
-         if (worker_file)
-            filestream_close(worker_file);
-         worker_file = NULL;
-         open_path[0] = 0;
-         active_path[0] = 0;
-         active_seq = 0;
-         worker_pos = 0;
+         if (s_AuroraPceAsyncPauseCloseFile)
+         {
+            if (worker_file)
+               filestream_close(worker_file);
+            worker_file = NULL;
+            open_path[0] = 0;
+            active_path[0] = 0;
+            active_seq = 0;
+            worker_pos = 0;
+         }
 
          AURORA_PCE_EE_SYNC();
          s_AuroraPceAsyncPauseAck = pause_token;
@@ -374,10 +384,14 @@ static void PCE_AuroraCdAsyncCancelAll(void)
    PCE_AuroraCdAsyncSignal();
 }
 
-/* AURORA_PCE_CD_MENU_IO_QUIESCE_V1_20260901
- * Stop async CDDA filesystem traffic and wait for worker acknowledgement.
- * Logical cdstream positions are not rewound. */
-int PCE_AuroraCdAsyncQuiesce(unsigned int timeout_ms)
+/* AURORA_PS2_THREE_BUG_FIX_V1_20260912_PCE_SOFT_PAUSE_CORE_API
+ * Two barriers share the same token/ack path:
+ *   close_file=0: UI/menu pause. Preserve RFILE and the ready prefetch window.
+ *   close_file=1: teardown. Cancel staged work and close the private RFILE.
+ *
+ * In both cases ACK is produced only by the worker, after any in-flight read
+ * has returned, so the caller never races an active filesystem operation. */
+static int PCE_AuroraCdAsyncPauseImpl(unsigned int timeout_ms, int close_file)
 {
    uint32_t token;
    unsigned int waited = 0;
@@ -389,15 +403,20 @@ int PCE_AuroraCdAsyncQuiesce(unsigned int timeout_ms)
    if (token == 0)
       token = ++s_AuroraPceAsyncPauseCounter;
 
-   s_AuroraPceAsyncBufSerial = 0;
-   s_AuroraPceAsyncBufReady = 0;
-   s_AuroraPceAsyncReqSerial = 0;
-   s_AuroraPceAsyncReqPath[0] = 0;
+   if (close_file)
+   {
+      /* Preserve the pre-existing hard-quiesce semantics for unload/swap. */
+      s_AuroraPceAsyncBufSerial = 0;
+      s_AuroraPceAsyncBufReady = 0;
+      s_AuroraPceAsyncReqSerial = 0;
+      s_AuroraPceAsyncReqPath[0] = 0;
+      ++s_AuroraPceAsyncReqSeq;
+   }
+
    s_AuroraPceAsyncPauseAck = 0;
+   s_AuroraPceAsyncPauseCloseFile = close_file ? 1 : 0;
    s_AuroraPceAsyncPauseRequest = token;
    AURORA_PCE_EE_SYNC();
-
-   ++s_AuroraPceAsyncReqSeq;
    PCE_AuroraCdAsyncSignal();
 
    for (;;)
@@ -415,10 +434,34 @@ int PCE_AuroraCdAsyncQuiesce(unsigned int timeout_ms)
    return s_AuroraPceAsyncPauseAck == token ? 1 : 0;
 }
 
+int PCE_AuroraCdAsyncPause(unsigned int timeout_ms)
+{
+   return PCE_AuroraCdAsyncPauseImpl(timeout_ms, 0);
+}
+
+/* AURORA_SSF2_PCE_MENU_FIX_V2_20260913_PCE_ACK_POLL_CORE
+ * Poll-only completion test: no wait and no storage access. */
+int PCE_AuroraCdAsyncPauseReady(void)
+{
+   uint32_t request, ack;
+   if (s_AuroraPceAsyncThreadId < 0 || s_AuroraPceAsyncSema < 0) return 1;
+   AURORA_PCE_EE_SYNC();
+   request = s_AuroraPceAsyncPauseRequest;
+   ack = s_AuroraPceAsyncPauseAck;
+   return request != 0 && ack == request;
+}
+
+/* Hard barrier kept for game unload/content swap. */
+int PCE_AuroraCdAsyncQuiesce(unsigned int timeout_ms)
+{
+   return PCE_AuroraCdAsyncPauseImpl(timeout_ms, 1);
+}
+
 void PCE_AuroraCdAsyncResume(void)
 {
    s_AuroraPceAsyncPauseRequest = 0;
    s_AuroraPceAsyncPauseAck = 0;
+   s_AuroraPceAsyncPauseCloseFile = 0;
    AURORA_PCE_EE_SYNC();
 }
 
