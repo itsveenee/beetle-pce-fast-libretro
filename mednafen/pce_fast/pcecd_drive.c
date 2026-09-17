@@ -850,7 +850,22 @@ static INLINE void RunCDDA(uint32 system_timestamp, int32 run_time)
 
   while(cdda.CDDADiv <= 0)
   {
-   const uint32 synthtime = ((system_timestamp + (cdda.CDDADiv >> 16))) / cdda.CDDATimeDiv;
+#ifdef AURORA_PS2_PCE_FAST
+   /* AURORA_PCECD_CDDA_CONST_DIV3_V5_20260917
+    * Aurora fixes OC_Multiplier=1, so PCECD_Drive_Init() receives a
+    * CDDATimeDiv of 3.  Keep a runtime fallback so this remains exact even
+    * if that frontend invariant changes later.  The hot path lets GCC turn
+    * /3 into its reciprocal/shift sequence instead of issuing an EE DIV
+    * for every 44.1-kHz CDDA sample. */
+   const uint32 synth_numer =
+      (uint32)(system_timestamp + (cdda.CDDADiv >> 16));
+   const uint32 synthtime =
+      (cdda.CDDATimeDiv == 3) ?
+         (synth_numer / 3) : (synth_numer / cdda.CDDATimeDiv);
+#else
+   const uint32 synthtime =
+      ((system_timestamp + (cdda.CDDADiv >> 16))) / cdda.CDDATimeDiv;
+#endif
 
    cdda.CDDADiv += cdda.CDDADivAcc;
 
@@ -903,11 +918,20 @@ static INLINE void RunCDDA(uint32 system_timestamp, int32 run_time)
 
      CDIF_ReadRawSector(Cur_CDIF, tmpbuf, read_sec);	//, read_sec_end, read_sec_start);
 
+#if defined(AURORA_PS2_PCE_FAST) && defined(LSB_FIRST)
+     /* AURORA_PCECD_CDDA_LE16_BULK_COPY_V5_20260917
+      * CDIF raw CDDA samples are little-endian PCM16.  The PS2 EE build is
+      * little-endian too, so rebuilding all 1176 words byte-by-byte with
+      * MDFN_de16lsb() is bit-identical to copying their representation.
+      * memcpy also avoids alignment/aliasing assumptions. */
+     memcpy(cdda.CDDASectorBuffer, tmpbuf, sizeof(cdda.CDDASectorBuffer));
+#else
      {
       int i;
       for(i = 0; i < 588 * 2; i++)
        cdda.CDDASectorBuffer[i] = MDFN_de16lsb(&tmpbuf[i * 2]);
      }
+#endif
 
      memcpy(cd.SubPWBuf, tmpbuf + 2352, 96);
     }
@@ -921,8 +945,37 @@ static INLINE void RunCDDA(uint32 system_timestamp, int32 run_time)
 
    if(!(cd.SubQBuf_Last[0] & 0x40) && cdda.PlayMode != PLAYMODE_SILENT)
    {
+#ifdef AURORA_PS2_PCE_FAST
+    /* AURORA_PCECD_CDDA_VOLUME_EXACT_FASTPATH_V5_20260917
+     * With Aurora's normal 100% CDDA setting and no active fade,
+     * Fader_SyncWhich() programs the drive volume to exactly 32768 (0.5 Q16).
+     * Preserve the original signed arithmetic result exactly while avoiding
+     * two multiplies per CDDA sample.  65536 is also an exact identity case;
+     * every fade/custom value keeps the original multiply+shift path. */
+    const int32 left_sample =
+       cdda.CDDASectorBuffer[cdda.CDDAReadPos * 2 + 0];
+    const int32 right_sample =
+       cdda.CDDASectorBuffer[cdda.CDDAReadPos * 2 + 1];
+
+    if(cdda.CDDAVolume == 32768)
+    {
+     sample[0] = left_sample >> 1;
+     sample[1] = right_sample >> 1;
+    }
+    else if(cdda.CDDAVolume == 65536)
+    {
+     sample[0] = left_sample;
+     sample[1] = right_sample;
+    }
+    else
+    {
+     sample[0] = (left_sample * cdda.CDDAVolume) >> 16;
+     sample[1] = (right_sample * cdda.CDDAVolume) >> 16;
+    }
+#else
     sample[0] = (cdda.CDDASectorBuffer[cdda.CDDAReadPos * 2 + 0] * cdda.CDDAVolume) >> 16;
     sample[1] = (cdda.CDDASectorBuffer[cdda.CDDAReadPos * 2 + 1] * cdda.CDDAVolume) >> 16;
+#endif
    }
 
    if(!(cdda.CDDAReadPos % 6))

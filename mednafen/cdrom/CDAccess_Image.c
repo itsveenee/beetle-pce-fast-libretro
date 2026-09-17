@@ -1395,7 +1395,10 @@ static int32_t CDAccess_Image_MakeSubPQ(CDAccess_Image *self, int32_t lba, uint8
 static bool CDAccess_Image_Read_Raw_Sector(CDAccess *cda, uint8_t *buf, int32_t lba)
 {
    CDAccess_Image *self = (CDAccess_Image *)cda;
-   uint8_t SimuQ[0xC];
+   /* AURORA_PCECD_DEAD_SIMUQ_REMOVAL_V5_20260917
+    * SimuQ used to receive a complete 96-byte->12-byte Q deinterleave here,
+    * but no byte of that local buffer was ever read.  SubPW itself remains
+    * intact and the drive still performs its required GenSubQFromSubPW(). */
    int32_t track;
 
    /* AURORA_V4_4_CUMULATIVE_20260908
@@ -1426,7 +1429,6 @@ static bool CDAccess_Image_Read_Raw_Sector(CDAccess *cda, uint8_t *buf, int32_t 
 
    memset(buf + 2352, 0, 96);
    track = CDAccess_Image_MakeSubPQ(self, lba, buf + 2352);
-   subq_deinterleave(buf + 2352, SimuQ);
 
    ct = &self->Tracks[track];
 
