@@ -686,6 +686,53 @@ static INLINE void AuroraBuildSpriteLineCache(vdc_t *which_vdc)
    }
 }
 
+/* AURORA_PCE_SPRITE_IRQ_FASTPATH_V9_20260930
+ *
+ * When no sprite pixels are observable and sprite-0 collision IRQ is disabled,
+ * overflow is the only sprite-render side effect that may still be required.
+ * Reproduce that side effect directly instead of building SpriteList, fixing
+ * tile cache entries, clearing a line buffer and drawing pixels that cannot be
+ * consumed. The cached path already stores up to the 17th line member, which
+ * is exactly what native overflow detection needs.
+ */
+static INLINE void AuroraEvaluateSpriteOverflowOnly(vdc_t *vdc)
+{
+   if(!(vdc->CR & 0x02))
+      return;
+
+   if(!unlimited_sprites && vdc->RCRCount < 1024)
+   {
+      if(vdc->aurora_spr_line_count[(unsigned)vdc->RCRCount] > 16)
+      {
+         vdc->status |= VDCS_OR;
+         HuC6280_IRQBegin(MDFN_IQIRQ1);
+      }
+      return;
+   }
+
+   {
+      int i;
+      int active_sprites = 0;
+
+      for(i = 0; i < vdc->SAT_Cache_Valid; ++i)
+      {
+         const SAT_Cache_t *SATR = &vdc->SAT_Cache[i];
+         const uint32 y_offset = vdc->RCRCount - SATR->y;
+
+         if(y_offset < SATR->height)
+         {
+            if(active_sprites == 16)
+            {
+               vdc->status |= VDCS_OR;
+               HuC6280_IRQBegin(MDFN_IQIRQ1);
+               return;
+            }
+            ++active_sprites;
+         }
+      }
+   }
+}
+
 /* Sprite-cache bytes are 0..15. Reject an all-transparent half in one
  * 64-bit test; for an all-opaque half remove eight per-pixel transparency
  * branches. Mixed rows retain the original scalar semantics.
@@ -1027,8 +1074,15 @@ static NO_INLINE void DrawSprites(vdc_t *vdc, const int32 end, uint16 *spr_lineb
       uint32 prio_or;
       uint16 *dest_pix;
 
+#ifdef AURORA_PS2_PCE_FAST
+      /* Fully outside [0,end): cache/order work above is intentionally kept,
+       * but there are no visible pixels and no possible sprite-0 collision. */
+      if(pos <= -16 || pos >= end)
+         continue;
+#else
       if(pos > end)
          continue;
+#endif
 
       dest_pix = &spr_linebuf[pos];
       prio_or = 0x100 | SpriteList[i].palette_index;
@@ -1420,13 +1474,32 @@ void VDC_RunFrame(EmulateSpecStruct *espec, bool IsHES)
                      memset(bg_linebuf, 0, end - start + (vdc->BG_XOffset & 7));
                }
 
-               if((vdc->CR & 0x40) && (SHOULD_DRAW || (vdc->CR & 0x03)))	// Don't skip sprite drawing if we can generate sprite #0 or sprite overflow IRQs.
+               if((vdc->CR & 0x40) && (SHOULD_DRAW || (vdc->CR & 0x03)))	// Don't skip required sprite IRQ side effects.
                {
+#ifdef AURORA_PS2_PCE_FAST
+                  const bool aurora_need_sprite_pixels =
+                     SHOULD_DRAW && (userle & ULE_SPR0);
+                  const bool aurora_overflow_only =
+                     !aurora_need_sprite_pixels &&
+                     !(vdc->CR & 0x01) &&
+                     (vdc->CR & 0x02);
+
+                  if(aurora_overflow_only)
+                     AuroraEvaluateSpriteOverflowOnly(vdc);
+                  else
+#endif
                   if((userle & (ULE_SPR0)) || (vdc->CR & 0x03))
                      DrawSprites(vdc, end - start, spr_linebuf + 0x20);
 
+#ifdef AURORA_PS2_PCE_FAST
+                  /* Hidden lines are never mixed, so hiding the user sprite
+                   * layer only needs a zero buffer on an actually drawn line. */
+                  if(SHOULD_DRAW && !(userle & ULE_SPR0))
+                     memset(spr_linebuf + 0x20, 0, sizeof(uint16) * (end - start));
+#else
                   if(!(userle & (ULE_SPR0)))
                      memset(spr_linebuf + 0x20, 0, sizeof(uint16) * (end - start));
+#endif
                }
 
                if(SHOULD_DRAW){
